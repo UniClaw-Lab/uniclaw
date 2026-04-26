@@ -4,6 +4,7 @@ members = [
     "crates/uniclaw-receipt",
     "crates/uniclaw-verify",
     "crates/uniclaw-kernel",
+    "crates/uniclaw-constitution",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ anyhow = { version = "1.0", default-features = false, features = ["std"] }
 # Internal members.
 uniclaw-receipt = { path = "crates/uniclaw-receipt", version = "0.0.1" }
 uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
+uniclaw-constitution = { path = "crates/uniclaw-constitution", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]

@@ -8,6 +8,9 @@
 //! - tampering any byte of any receipt breaks verification
 
 use ed25519_dalek::SigningKey;
+use uniclaw_constitution::{
+    EmptyConstitution, InMemoryConstitution, MatchClause, Rule, RuleVerdict,
+};
 use uniclaw_kernel::{Clock, Kernel, KernelEvent, Proposal, Signer};
 use uniclaw_receipt::{
     Action, Decision, Digest, ProvenanceEdge, Receipt, ReceiptBody, RuleRef, crypto,
@@ -60,7 +63,11 @@ fn make_proposal(i: usize) -> Proposal {
 #[test]
 fn chain_invariants_hold_over_many_receipts() {
     let key = SigningKey::from_bytes(&[7u8; 32]);
-    let mut kernel = Kernel::new(Ed25519Signer(key), CountingClock(std::cell::Cell::new(0)));
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
 
     let mut receipts = Vec::with_capacity(N_RECEIPTS);
     for i in 0..N_RECEIPTS {
@@ -109,7 +116,11 @@ fn chain_invariants_hold_over_many_receipts() {
 #[test]
 fn tampering_any_receipt_breaks_verification() {
     let key = SigningKey::from_bytes(&[7u8; 32]);
-    let mut kernel = Kernel::new(Ed25519Signer(key), CountingClock(std::cell::Cell::new(0)));
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
 
     let outcome = kernel.handle(KernelEvent::EvaluateProposal(make_proposal(0)));
     let receipt = outcome.receipt;
@@ -139,7 +150,11 @@ fn resume_state_continues_chain_correctly() {
     let key = SigningKey::from_bytes(&[7u8; 32]);
 
     // Run 3 receipts, then resume from the resulting state and run 3 more.
-    let mut kernel_a = Kernel::new(Ed25519Signer(key), CountingClock(std::cell::Cell::new(0)));
+    let mut kernel_a = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
     let mut receipts = Vec::new();
     for i in 0..3 {
         let out = kernel_a.handle(KernelEvent::EvaluateProposal(make_proposal(i)));
@@ -153,6 +168,7 @@ fn resume_state_continues_chain_correctly() {
         resumed_state,
         Ed25519Signer(key2),
         CountingClock(std::cell::Cell::new(3)),
+        EmptyConstitution,
     );
     for i in 3..6 {
         let out = kernel_b.handle(KernelEvent::EvaluateProposal(make_proposal(i)));
@@ -167,4 +183,59 @@ fn resume_state_continues_chain_correctly() {
             "chain broke at boundary i={i}",
         );
     }
+}
+
+#[test]
+fn constitution_override_appears_in_signed_receipt() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let constitution = InMemoryConstitution::from_rules(vec![Rule {
+        id: "block-shell".into(),
+        description: "Block shell.exec".into(),
+        verdict: RuleVerdict::Deny,
+        match_clause: MatchClause {
+            kind: Some("shell.exec".into()),
+            target_contains: None,
+        },
+    }]);
+
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        constitution,
+    );
+
+    // Caller proposes Allowed; constitution must force Denied.
+    let p = Proposal {
+        action: Action {
+            kind: "shell.exec".into(),
+            target: "rm -rf /".into(),
+            input_hash: Digest([0u8; 32]),
+        },
+        decision: Decision::Allowed,
+        constitution_rules: vec![],
+        provenance: vec![],
+    };
+
+    let outcome = kernel.handle(KernelEvent::EvaluateProposal(p));
+    let r = &outcome.receipt;
+
+    // The receipt records the override.
+    assert_eq!(
+        r.body.decision,
+        Decision::Denied,
+        "constitution must force Denied"
+    );
+    assert_eq!(r.body.constitution_rules.len(), 1);
+    assert_eq!(r.body.constitution_rules[0].id, "block-shell");
+
+    // The signature is over the post-override body, so it verifies.
+    crypto::verify(r).expect("override receipt must verify");
+
+    // Mutating the body's decision back to Allowed would break the chain.
+    let mut tampered = r.clone();
+    tampered.body.decision = Decision::Allowed;
+    assert!(
+        crypto::verify(&tampered).is_err(),
+        "rolling back the constitution override must break verification",
+    );
 }

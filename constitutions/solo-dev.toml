@@ -1,0 +1,48 @@
+# Uniclaw Constitution: Solo Developer Mode
+#
+# Conservative defaults for a single operator running an agent on their own
+# workstation. Blocks the most common foot-guns: arbitrary shell, financial
+# endpoints, and obvious package-installation calls. Easy to relax — fork
+# this file, lower the `verdict` of the rules you don't want.
+#
+# This is **not** a complete or audited policy. It is a starter file that
+# proves the constitution engine works end-to-end. Real production
+# constitutions (`pci-dss.toml`, `gdpr.toml`, `hipaa.toml`,
+# `journalist-source-protection.toml`) ship in Phase 2 of the master plan.
+
+title = "Solo Developer Mode"
+version = 1
+
+[[rules]]
+id = "solo-dev/no-shell"
+description = "Solo dev mode: agents may not execute arbitrary shell commands."
+verdict = "deny"
+match.kind = "shell.exec"
+
+[[rules]]
+id = "solo-dev/no-finance-stripe"
+description = "Block agent POSTs to Stripe-controlled hosts."
+verdict = "deny"
+match.kind = "http.post"
+match.target_contains = "stripe.com"
+
+[[rules]]
+id = "solo-dev/no-finance-paypal"
+description = "Block agent POSTs to PayPal-controlled hosts."
+verdict = "deny"
+match.kind = "http.post"
+match.target_contains = "paypal.com"
+
+[[rules]]
+id = "solo-dev/no-finance-bank"
+description = "Block agent POSTs to anything containing 'bank' in the host."
+verdict = "deny"
+match.kind = "http.post"
+match.target_contains = "bank"
+
+[[rules]]
+id = "solo-dev/no-package-install"
+description = "Agents may not install system packages without explicit operator action."
+verdict = "deny"
+match.kind = "shell.exec"
+match.target_contains = "apt-get install"

@@ -1,6 +1,6 @@
 [package]
-name = "uniclaw-kernel"
-description = "Trusted runtime core for Uniclaw — the verifiable agent kernel."
+name = "uniclaw-constitution"
+description = "Constitution engine for Uniclaw — human-readable rules judged before the policy gate."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,14 +14,8 @@ categories.workspace = true
 
 [dependencies]
 uniclaw-receipt.workspace = true
-uniclaw-constitution.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-blake3.workspace = true
-
-[dev-dependencies]
-uniclaw-receipt = { workspace = true, features = ["crypto"] }
-ed25519-dalek = { workspace = true }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 
 [lints]
 workspace = true

@@ -12,6 +12,36 @@ format change history.
 
 ### Added
 
+- **`uniclaw-constitution` crate** — deterministic rules engine, separate
+  from the model, judging proposed actions before the policy gate (master
+  plan §11.3). v0 ships:
+  - `Constitution` trait + `ConstitutionVerdict` (matched rules + optional
+    forced override).
+  - `EmptyConstitution` no-op + `InMemoryConstitution` evaluator.
+  - TOML loader (`parse_toml`) with typed `ParseError`.
+  - `Rule` / `MatchClause` / `RuleVerdict` (today: `Deny` only).
+  - **Safe-by-default**: rules can force `Decision::Denied`, never grant
+    `Decision::Allowed`.
+- **First starter constitution** at `constitutions/solo-dev.toml` blocking
+  `shell.exec`, package installation, and POSTs to known financial hosts.
+- Kernel now consults a `Constitution` on every `EvaluateProposal`. The
+  receipt records every matched rule in `body.constitution_rules` and the
+  signature covers the post-override decision (so rolling back a deny in
+  the receipt breaks verification).
+- 21 new tests across the constitution crate + kernel: 13 constitution
+  unit tests, 4 solo-dev TOML integration tests, 3 kernel unit tests
+  proving override behavior, 1 kernel chain integration test that signs
+  an override and verifies it cold.
+- Benchmark: `Constitution::evaluate` adds sub-microsecond overhead (5
+  rules, no match: 0.03 µs; 1 match: 0.25 µs). End-to-end
+  `Kernel::handle()` is unchanged within noise — the constitution is
+  effectively free at this rule scale.
+
+### Changed
+
+- `Kernel::new` and `Kernel::resume` now take a third argument: a
+  `Constitution` implementation. Existing callers pass `EmptyConstitution`.
+
 - **`uniclaw-kernel` crate** — the trusted runtime core (sketch). Generic
   over `Signer` + `Clock` traits so tests inject deterministic mocks and
   production can plug HSM-backed signers without touching the kernel.

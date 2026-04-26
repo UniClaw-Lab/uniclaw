@@ -1,5 +1,8 @@
 //! The kernel state machine.
 
+use alloc::vec::Vec;
+
+use uniclaw_constitution::Constitution;
 use uniclaw_receipt::{MerkleLeaf, RECEIPT_FORMAT_VERSION, ReceiptBody};
 
 use crate::event::{KernelEvent, Proposal};
@@ -10,34 +13,36 @@ use crate::traits::{Clock, Signer};
 
 /// The trusted runtime core.
 ///
-/// Generic over `Signer` and `Clock` so tests can inject deterministic
-/// dependencies, embedded targets can supply their own clock, and production
-/// can plug HSM-backed signers without touching the kernel itself.
+/// Generic over `Signer`, `Clock`, and `Constitution` so tests can inject
+/// deterministic dependencies, embedded targets can supply their own clock,
+/// and production can plug HSM-backed signers and operator-authored
+/// constitutions without touching the kernel itself.
 #[derive(Debug)]
-pub struct Kernel<S: Signer, C: Clock> {
+pub struct Kernel<S: Signer, C: Clock, K: Constitution> {
     state: KernelState,
     signer: S,
     clock: C,
+    constitution: K,
 }
 
-impl<S: Signer, C: Clock> Kernel<S, C> {
+impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
     /// Construct a fresh kernel at genesis state.
-    pub fn new(signer: S, clock: C) -> Self {
+    pub fn new(signer: S, clock: C, constitution: K) -> Self {
         Self {
             state: KernelState::genesis(),
             signer,
             clock,
+            constitution,
         }
     }
 
     /// Construct a kernel resuming from a known prior state.
-    ///
-    /// Used when a runtime restarts from a persisted Merkle chain.
-    pub fn resume(state: KernelState, signer: S, clock: C) -> Self {
+    pub fn resume(state: KernelState, signer: S, clock: C, constitution: K) -> Self {
         Self {
             state,
             signer,
             clock,
+            constitution,
         }
     }
 
@@ -47,7 +52,7 @@ impl<S: Signer, C: Clock> Kernel<S, C> {
         &self.state
     }
 
-    /// Drive the state machine with one event. Always emits a receipt today.
+    /// Drive the state machine with one event.
     pub fn handle(&mut self, event: KernelEvent) -> KernelOutcome {
         match event {
             KernelEvent::EvaluateProposal(p) => self.handle_proposal(p),
@@ -57,11 +62,18 @@ impl<S: Signer, C: Clock> Kernel<S, C> {
     fn handle_proposal(&mut self, p: Proposal) -> KernelOutcome {
         let issued_at = self.clock.now_iso8601();
 
+        // Consult the constitution. The kernel records every matched rule
+        // and accepts a forced override (today: only `Denied`).
+        let verdict = self.constitution.evaluate(&p.action);
+        let final_decision = verdict.override_decision.unwrap_or(p.decision);
+        let constitution_rules =
+            merge_constitution_rules(p.constitution_rules, verdict.matched_rules);
+
         let leaf_hash = compute_leaf_hash(
             self.state.sequence,
             &issued_at,
             &p.action,
-            p.decision,
+            final_decision,
             &self.state.prev_hash,
         );
 
@@ -69,8 +81,8 @@ impl<S: Signer, C: Clock> Kernel<S, C> {
             schema_version: RECEIPT_FORMAT_VERSION,
             issued_at,
             action: p.action,
-            decision: p.decision,
-            constitution_rules: p.constitution_rules,
+            decision: final_decision,
+            constitution_rules,
             provenance: p.provenance,
             redactor_stack_hash: None,
             merkle_leaf: MerkleLeaf {
@@ -86,6 +98,17 @@ impl<S: Signer, C: Clock> Kernel<S, C> {
     }
 }
 
+/// If the constitution matched any rules, the constitution is authoritative
+/// for the receipt's `constitution_rules` field. Otherwise, fall back to
+/// whatever the caller pre-populated (today this is mostly empty;
+/// future steps may carry rules from upstream layers).
+fn merge_constitution_rules(
+    caller: Vec<uniclaw_receipt::RuleRef>,
+    matched: Vec<uniclaw_receipt::RuleRef>,
+) -> Vec<uniclaw_receipt::RuleRef> {
+    if matched.is_empty() { caller } else { matched }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,11 +116,11 @@ mod tests {
     use alloc::vec;
     use core::cell::Cell;
 
+    use uniclaw_constitution::{
+        EmptyConstitution, InMemoryConstitution, MatchClause, Rule, RuleVerdict,
+    };
     use uniclaw_receipt::{Action, Decision, Digest, Receipt, ReceiptBody};
 
-    /// Mock signer that produces deterministic, hand-crafted receipts —
-    /// avoids ed25519 in unit tests so we can isolate state-machine logic.
-    /// Integration tests use the real ed25519 signer.
     struct StubSigner;
 
     impl Signer for StubSigner {
@@ -146,9 +169,21 @@ mod tests {
         }
     }
 
+    fn deny_shell() -> InMemoryConstitution {
+        InMemoryConstitution::from_rules(vec![Rule {
+            id: "test/no-shell".into(),
+            description: "deny shell".into(),
+            verdict: RuleVerdict::Deny,
+            match_clause: MatchClause {
+                kind: Some("shell.exec".into()),
+                target_contains: None,
+            },
+        }])
+    }
+
     #[test]
     fn first_receipt_has_sequence_zero_and_zero_prev_hash() {
-        let mut k = Kernel::new(StubSigner, FixedClock);
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
         let out = k.handle(KernelEvent::EvaluateProposal(proposal()));
         assert_eq!(out.receipt.body.merkle_leaf.sequence, 0);
         assert_eq!(out.receipt.body.merkle_leaf.prev_hash, Digest([0u8; 32]));
@@ -156,7 +191,7 @@ mod tests {
 
     #[test]
     fn state_advances_after_handle() {
-        let mut k = Kernel::new(StubSigner, FixedClock);
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
         assert_eq!(k.state().sequence, 0);
         let out = k.handle(KernelEvent::EvaluateProposal(proposal()));
         assert_eq!(k.state().sequence, 1);
@@ -170,6 +205,7 @@ mod tests {
             CountingClock {
                 counter: Cell::new(0),
             },
+            EmptyConstitution,
         );
         let r1 = k.handle(KernelEvent::EvaluateProposal(proposal()));
         let r2 = k.handle(KernelEvent::EvaluateProposal(proposal()));
@@ -187,6 +223,7 @@ mod tests {
             CountingClock {
                 counter: Cell::new(0),
             },
+            EmptyConstitution,
         );
         let r1 = k.handle(KernelEvent::EvaluateProposal(proposal()));
         let r2 = k.handle(KernelEvent::EvaluateProposal(proposal()));
@@ -202,10 +239,49 @@ mod tests {
             sequence: 42,
             prev_hash: Digest([0xCD; 32]),
         };
-        let mut k = Kernel::resume(resumed_state, StubSigner, FixedClock);
+        let mut k = Kernel::resume(resumed_state, StubSigner, FixedClock, EmptyConstitution);
         let out = k.handle(KernelEvent::EvaluateProposal(proposal()));
         assert_eq!(out.receipt.body.merkle_leaf.sequence, 42);
         assert_eq!(out.receipt.body.merkle_leaf.prev_hash, Digest([0xCD; 32]));
         assert_eq!(k.state().sequence, 43);
+    }
+
+    #[test]
+    fn constitution_can_force_denied_on_proposed_allowed() {
+        let mut k = Kernel::new(StubSigner, FixedClock, deny_shell());
+        let mut p = proposal();
+        p.action.kind = "shell.exec".into();
+        p.decision = Decision::Allowed; // model proposed allow
+
+        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        assert_eq!(
+            out.receipt.body.decision,
+            Decision::Denied,
+            "constitution must override Allowed → Denied",
+        );
+        assert_eq!(out.receipt.body.constitution_rules.len(), 1);
+        assert_eq!(out.receipt.body.constitution_rules[0].id, "test/no-shell");
+    }
+
+    #[test]
+    fn constitution_does_not_relax_denied_to_allowed() {
+        // Even if no rule fires, the constitution never grants Allowed.
+        // Caller proposed Denied; constitution sees nothing; receipt stays Denied.
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
+        let mut p = proposal();
+        p.decision = Decision::Denied;
+
+        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        assert_eq!(out.receipt.body.decision, Decision::Denied);
+    }
+
+    #[test]
+    fn non_matching_action_passes_through_with_no_rules_recorded() {
+        let mut k = Kernel::new(StubSigner, FixedClock, deny_shell());
+        let p = proposal(); // kind = "http.fetch"
+
+        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        assert_eq!(out.receipt.body.decision, Decision::Allowed);
+        assert!(out.receipt.body.constitution_rules.is_empty());
     }
 }
