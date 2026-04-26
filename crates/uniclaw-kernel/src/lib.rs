@@ -41,6 +41,6 @@ mod traits;
 pub use event::{KernelEvent, Proposal};
 pub use kernel::Kernel;
 pub use leaf::compute_leaf_hash;
-pub use outcome::KernelOutcome;
+pub use outcome::{KernelOutcome, OutcomeKind};
 pub use state::KernelState;
 pub use traits::{Clock, Signer};

@@ -15,6 +15,7 @@ categories.workspace = true
 [dependencies]
 uniclaw-receipt.workspace = true
 uniclaw-constitution.workspace = true
+uniclaw-budget.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 blake3.workspace = true

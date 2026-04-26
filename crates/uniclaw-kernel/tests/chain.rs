@@ -8,10 +8,11 @@
 //! - tampering any byte of any receipt breaks verification
 
 use ed25519_dalek::SigningKey;
+use uniclaw_budget::{Budget, CapabilityLease, LeaseId, ResourceUse};
 use uniclaw_constitution::{
     EmptyConstitution, InMemoryConstitution, MatchClause, Rule, RuleVerdict,
 };
-use uniclaw_kernel::{Clock, Kernel, KernelEvent, Proposal, Signer};
+use uniclaw_kernel::{Clock, Kernel, KernelEvent, OutcomeKind, Proposal, Signer};
 use uniclaw_receipt::{
     Action, Decision, Digest, ProvenanceEdge, Receipt, ReceiptBody, RuleRef, crypto,
 };
@@ -37,27 +38,27 @@ impl Clock for CountingClock {
 }
 
 fn make_proposal(i: usize) -> Proposal {
-    Proposal {
-        action: Action {
+    Proposal::unbounded(
+        Action {
             kind: "http.fetch".into(),
             target: format!("https://example.com/{i}"),
             input_hash: Digest([0u8; 32]),
         },
-        decision: if i.is_multiple_of(5) {
+        if i.is_multiple_of(5) {
             Decision::Denied
         } else {
             Decision::Allowed
         },
-        constitution_rules: vec![RuleRef {
+        vec![RuleRef {
             id: "solo-dev/no-shell-without-approval".into(),
             matched: false,
         }],
-        provenance: vec![ProvenanceEdge {
+        vec![ProvenanceEdge {
             from: "user".into(),
             to: "model".into(),
             kind: "request".into(),
         }],
-    }
+    )
 }
 
 #[test]
@@ -205,16 +206,16 @@ fn constitution_override_appears_in_signed_receipt() {
     );
 
     // Caller proposes Allowed; constitution must force Denied.
-    let p = Proposal {
-        action: Action {
+    let p = Proposal::unbounded(
+        Action {
             kind: "shell.exec".into(),
             target: "rm -rf /".into(),
             input_hash: Digest([0u8; 32]),
         },
-        decision: Decision::Allowed,
-        constitution_rules: vec![],
-        provenance: vec![],
-    };
+        Decision::Allowed,
+        vec![],
+        vec![],
+    );
 
     let outcome = kernel.handle(KernelEvent::EvaluateProposal(p));
     let r = &outcome.receipt;
@@ -238,4 +239,79 @@ fn constitution_override_appears_in_signed_receipt() {
         crypto::verify(&tampered).is_err(),
         "rolling back the constitution override must break verification",
     );
+}
+
+#[test]
+fn budget_thread_through_eight_calls_then_exhausts() {
+    // Drive the kernel with a real Ed25519 signer, threading a single lease
+    // through several proposals. After enough charges the lease exhausts
+    // and the kernel mints a Denied receipt that records the budget rule.
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    // Lease that covers exactly 7 charges of 100 bytes each.
+    let mut lease = Some(CapabilityLease::new(
+        LeaseId::ZERO,
+        Budget {
+            net_bytes: 700,
+            file_writes: 0,
+            llm_tokens: 0,
+            wall_ms: 0,
+            max_uses: 100,
+        },
+    ));
+
+    let charge = ResourceUse {
+        net_bytes: 100,
+        file_writes: 0,
+        llm_tokens: 0,
+        wall_ms: 0,
+        uses: 1,
+    };
+
+    let mut allowed_count = 0usize;
+    let mut denied_count = 0usize;
+
+    for i in 0..8 {
+        let p = Proposal::with_lease(
+            Action {
+                kind: "http.fetch".into(),
+                target: format!("https://example.com/{i}"),
+                input_hash: Digest([0u8; 32]),
+            },
+            Decision::Allowed,
+            vec![],
+            vec![],
+            lease
+                .take()
+                .expect("lease threaded through every iteration"),
+            charge,
+        );
+        let out = kernel.handle(KernelEvent::EvaluateProposal(p));
+
+        // Every receipt verifies cold regardless of the outcome.
+        crypto::verify(&out.receipt).expect("receipt must verify");
+
+        match out.kind {
+            OutcomeKind::Allowed => allowed_count += 1,
+            OutcomeKind::DeniedByBudget(_) => denied_count += 1,
+            other => panic!("unexpected kind on iter {i}: {other:?}"),
+        }
+        lease = out.lease_after;
+    }
+
+    assert_eq!(
+        allowed_count, 7,
+        "first 7 charges should fit in 700-byte budget"
+    );
+    assert_eq!(denied_count, 1, "eighth charge must be denied");
+
+    // Final lease has consumed the full budget but no more.
+    let final_lease = lease.expect("lease still present after exhaustion");
+    assert_eq!(final_lease.consumed.net_bytes, 700);
+    assert_eq!(final_lease.remaining().net_bytes, 0);
 }
