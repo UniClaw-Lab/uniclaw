@@ -12,6 +12,21 @@ format change history.
 
 ### Added
 
+- **`uniclaw-kernel` crate** — the trusted runtime core (sketch). Generic
+  over `Signer` + `Clock` traits so tests inject deterministic mocks and
+  production can plug HSM-backed signers without touching the kernel.
+  Modules: `state` (sequence + prev_hash), `event` (`Proposal`,
+  `KernelEvent::EvaluateProposal`), `outcome`, `traits` (`Signer`, `Clock`),
+  `leaf` (Merkle leaf hashing), `kernel` (`Kernel::new` / `Kernel::resume` /
+  `Kernel::handle`).
+- 14 kernel unit tests + 3 integration tests in `tests/chain.rs` exercising
+  monotonic sequence, prev_hash chaining over 32 receipts, full Ed25519
+  verification of every leaf, tampering detection at body and merkle-leaf
+  level, and resume-from-prior-state continuity.
+- Per-call benchmark: `Kernel::handle()` runs at **33.8 µs/call (~30 000
+  ops/sec)** on x86_64 — Ed25519 sign + BLAKE3 leaf hash + serde_json body
+  encoding, end to end.
+
 - **RFC-0001 — Receipt Format**, the canonical specification of the wire
   format, canonical encoding, content-addressing, verification algorithm,
   security considerations, and versioning policy.
