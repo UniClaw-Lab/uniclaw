@@ -52,6 +52,7 @@ impl Constitution for InMemoryConstitution {
     fn evaluate(&self, action: &Action) -> ConstitutionVerdict {
         let mut matched = Vec::new();
         let mut force_deny = false;
+        let mut require_approval = false;
 
         for rule in &self.rules {
             if !rule.match_clause.matches(action) {
@@ -63,16 +64,24 @@ impl Constitution for InMemoryConstitution {
             });
             match rule.verdict {
                 RuleVerdict::Deny => force_deny = true,
+                RuleVerdict::RequireApproval => require_approval = true,
             }
         }
 
+        // Precedence: Deny > RequireApproval > pass-through. Deny is the
+        // safe-by-default choice: if any rule wants the action stopped
+        // outright, that wins over a request for human review.
+        let override_decision = if force_deny {
+            Some(Decision::Denied)
+        } else if require_approval {
+            Some(Decision::Pending)
+        } else {
+            None
+        };
+
         ConstitutionVerdict {
             matched_rules: matched,
-            override_decision: if force_deny {
-                Some(Decision::Denied)
-            } else {
-                None
-            },
+            override_decision,
         }
     }
 }
@@ -162,5 +171,53 @@ mod tests {
         let v2 = c.evaluate(&action("http.get", "https://example.com/"));
         assert_eq!(v1.override_decision, Some(Decision::Denied));
         assert_eq!(v2.override_decision, Some(Decision::Denied));
+    }
+
+    fn require_approval_rule(id: &str, kind: &str) -> Rule {
+        Rule {
+            id: id.into(),
+            description: "needs operator review".into(),
+            verdict: RuleVerdict::RequireApproval,
+            match_clause: MatchClause {
+                kind: Some(kind.into()),
+                target_contains: None,
+            },
+        }
+    }
+
+    #[test]
+    fn require_approval_rule_yields_pending_decision() {
+        let c = InMemoryConstitution::from_rules(vec![require_approval_rule(
+            "needs-review",
+            "shell.exec",
+        )]);
+        let v = c.evaluate(&action("shell.exec", "ls"));
+        assert_eq!(v.override_decision, Some(Decision::Pending));
+        assert_eq!(v.matched_rules.len(), 1);
+        assert_eq!(v.matched_rules[0].id, "needs-review");
+    }
+
+    #[test]
+    fn deny_takes_precedence_over_require_approval_on_same_action() {
+        // If both verdicts match, Deny wins — safe-by-default.
+        let c = InMemoryConstitution::from_rules(vec![
+            require_approval_rule("might-be-ok", "shell.exec"),
+            deny_rule("absolutely-not", Some("shell.exec"), None),
+        ]);
+        let v = c.evaluate(&action("shell.exec", "rm -rf /"));
+        assert_eq!(v.override_decision, Some(Decision::Denied));
+        // Both rules are still recorded in the receipt's audit trail.
+        assert_eq!(v.matched_rules.len(), 2);
+    }
+
+    #[test]
+    fn require_approval_passes_through_when_no_rule_fires() {
+        let c = InMemoryConstitution::from_rules(vec![require_approval_rule(
+            "shell-needs-review",
+            "shell.exec",
+        )]);
+        let v = c.evaluate(&action("http.get", "https://example.com/"));
+        assert!(v.matched_rules.is_empty());
+        assert_eq!(v.override_decision, None);
     }
 }

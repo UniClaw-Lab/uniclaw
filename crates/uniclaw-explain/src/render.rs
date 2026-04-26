@@ -95,6 +95,13 @@ fn render_rule_line(r: &RuleEntry) -> String {
                 format!("kernel-budget: {}", reason.display)
             }
         }
+        RuleKind::KernelApproval { reason } => {
+            if reason.display.is_empty() {
+                format!("kernel-approval: {}", reason.short_name)
+            } else {
+                format!("kernel-approval: {}", reason.display)
+            }
+        }
         RuleKind::UnknownKernel => "kernel-internal".into(),
     };
     let state = if r.matched { "matched" } else { "not matched" };
@@ -128,10 +135,15 @@ fn render_verdict(v: &Verdict) -> String {
                 .into()
         }
         Verdict::Approved => {
-            "  Decision is Approved. (Approval engine arrives in a future step.)\n".into()
+            "  Operator approved a previously-pending action.\n  The budget re-check at approve time succeeded; action was Approved.\n".into()
         }
-        Verdict::Pending => {
-            "  Decision is Pending. (Approval engine arrives in a future step.)\n".into()
+        Verdict::Pending { rules_consulted } => {
+            format!(
+                "  Constitution required operator review ({rules_consulted} rule(s) consulted).\n  Awaiting a ResolveApproval event to finalize.\n",
+            )
+        }
+        Verdict::DeniedByOperator => {
+            "  Operator denied a previously-pending action.\n".into()
         }
     }
 }
@@ -147,7 +159,7 @@ fn short_hex(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionInfo, BudgetReasonInfo, MerkleInfo};
+    use crate::{ActionInfo, ApprovalReasonInfo, BudgetReasonInfo, MerkleInfo};
 
     fn sample_explanation(decision: Decision, rules: Vec<RuleEntry>) -> Explanation {
         Explanation {
@@ -233,5 +245,51 @@ mod tests {
         let json = render_json(&e);
         let back: Explanation = serde_json::from_str(&json).expect("round-trip");
         assert_eq!(back, e);
+    }
+
+    #[test]
+    fn text_render_for_pending_explains_awaiting_approval() {
+        let rules = vec![RuleEntry {
+            id: "solo-dev/shell-needs-approval".into(),
+            matched: true,
+            kind: RuleKind::Constitution,
+        }];
+        let e = sample_explanation(Decision::Pending, rules);
+        let out = render_text(&e);
+        assert!(out.contains("PENDING"));
+        assert!(out.contains("Awaiting"));
+        assert!(out.contains("operator review"));
+    }
+
+    #[test]
+    fn text_render_for_approved_explains_operator_approval() {
+        let rules = vec![RuleEntry {
+            id: "solo-dev/shell-needs-approval".into(),
+            matched: true,
+            kind: RuleKind::Constitution,
+        }];
+        let e = sample_explanation(Decision::Approved, rules);
+        let out = render_text(&e);
+        assert!(out.contains("APPROVED"));
+        assert!(out.contains("Operator approved"));
+    }
+
+    #[test]
+    fn text_render_for_denied_by_operator_names_operator() {
+        let rules = vec![RuleEntry {
+            id: "$kernel/approval/denied_by_operator".into(),
+            matched: true,
+            kind: RuleKind::KernelApproval {
+                reason: ApprovalReasonInfo {
+                    short_name: "denied_by_operator".into(),
+                    display: "operator denied this action".into(),
+                },
+            },
+        }];
+        let e = sample_explanation(Decision::Denied, rules);
+        let out = render_text(&e);
+        assert!(out.contains("DENIED"));
+        assert!(out.contains("Operator denied"));
+        assert!(out.contains("kernel-approval"));
     }
 }

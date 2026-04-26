@@ -7,6 +7,7 @@ members = [
     "crates/uniclaw-constitution",
     "crates/uniclaw-budget",
     "crates/uniclaw-explain",
+    "crates/uniclaw-approval",
 ]
 
 [workspace.package]
@@ -38,6 +39,7 @@ uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
 uniclaw-constitution = { path = "crates/uniclaw-constitution", version = "0.0.1" }
 uniclaw-budget = { path = "crates/uniclaw-budget", version = "0.0.1" }
 uniclaw-explain = { path = "crates/uniclaw-explain", version = "0.0.1" }
+uniclaw-approval = { path = "crates/uniclaw-approval", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]

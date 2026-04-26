@@ -99,6 +99,10 @@ pub enum RuleKind {
     /// Virtual rule synthesized by the kernel because a capability lease
     /// exhausted or was revoked.
     KernelBudget { reason: BudgetReasonInfo },
+    /// Virtual rule synthesized by the kernel during approval resolution.
+    /// Today only `denied_by_operator` is emitted; future variants may
+    /// arrive with the approval-engine and channel-routing work.
+    KernelApproval { reason: ApprovalReasonInfo },
     /// `$kernel/...` rule whose suffix this version of the explainer
     /// doesn't recognize. The runtime that emitted it is newer than this
     /// explainer or uses an extension we haven't catalogued.
@@ -112,6 +116,15 @@ pub struct BudgetReasonInfo {
     pub short_name: String,
     /// Human-readable phrase via `BudgetError::Display`. Empty for
     /// unrecognized short names from a newer runtime.
+    pub display: String,
+}
+
+/// Decoded view of a `$kernel/approval/<reason>` rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalReasonInfo {
+    /// Stable short name (suffix after `$kernel/approval/`).
+    pub short_name: String,
+    /// Human-readable phrase. Empty for unrecognized short names.
     pub display: String,
 }
 
@@ -131,10 +144,15 @@ pub enum Verdict {
     DeniedByBudget { reason: BudgetReasonInfo },
     /// `Decision::Denied` with no matched rules — caller proposed Denied.
     DeniedAsProposed,
-    /// `Decision::Approved`. Reserved for the upcoming approval engine.
+    /// `Decision::Approved`. Operator approved a previously-pending action
+    /// and the kernel re-checked budget at approve time.
     Approved,
-    /// `Decision::Pending`. Reserved for the upcoming approval engine.
-    Pending,
+    /// `Decision::Pending`. Constitution required operator review; awaiting
+    /// a `ResolveApproval` event.
+    Pending { rules_consulted: usize },
+    /// `Decision::Denied` driven by a `$kernel/approval/denied_by_operator`
+    /// virtual rule — an operator denied a previously-pending action.
+    DeniedByOperator,
 }
 
 /// Summary of the receipt's Merkle leaf.
@@ -220,6 +238,17 @@ fn classify_rule(r: &RuleRef) -> RuleEntry {
             },
         );
         RuleKind::KernelBudget { reason: info }
+    } else if let Some(rest) = r.id.strip_prefix("$kernel/approval/") {
+        let display = match rest {
+            "denied_by_operator" => "operator denied this action".into(),
+            _ => String::new(),
+        };
+        RuleKind::KernelApproval {
+            reason: ApprovalReasonInfo {
+                short_name: rest.to_string(),
+                display,
+            },
+        }
     } else if r.id.starts_with('$') {
         RuleKind::UnknownKernel
     } else {
@@ -239,7 +268,17 @@ fn compute_verdict(decision: Decision, rules: &[RuleEntry]) -> Verdict {
             rules_consulted: rules.len(),
         },
         Decision::Denied => {
-            // Look for a matched budget rule first — most specific.
+            // Look for a matched approval-denial rule first — operator
+            // intent is the most specific cause we can attribute.
+            for r in rules {
+                if r.matched
+                    && let RuleKind::KernelApproval { reason } = &r.kind
+                    && reason.short_name == "denied_by_operator"
+                {
+                    return Verdict::DeniedByOperator;
+                }
+            }
+            // Then a matched budget rule.
             for r in rules.iter().rev() {
                 if r.matched
                     && let RuleKind::KernelBudget { reason } = &r.kind
@@ -249,7 +288,7 @@ fn compute_verdict(decision: Decision, rules: &[RuleEntry]) -> Verdict {
                     };
                 }
             }
-            // Else, the first matched constitution rule.
+            // Then the first matched constitution rule.
             for r in rules {
                 if r.matched && matches!(r.kind, RuleKind::Constitution) {
                     return Verdict::DeniedByConstitution {
@@ -261,7 +300,9 @@ fn compute_verdict(decision: Decision, rules: &[RuleEntry]) -> Verdict {
             Verdict::DeniedAsProposed
         }
         Decision::Approved => Verdict::Approved,
-        Decision::Pending => Verdict::Pending,
+        Decision::Pending => Verdict::Pending {
+            rules_consulted: rules.len(),
+        },
     }
 }
 
@@ -350,11 +391,39 @@ mod tests {
     #[test]
     fn classify_falls_back_to_unknown_kernel_for_alien_dollar_id() {
         let r = RuleRef {
-            id: "$kernel/approval/required".into(),
+            id: "$kernel/sleep/light".into(),
             matched: true,
         };
         let e = classify_rule(&r);
         assert!(matches!(e.kind, RuleKind::UnknownKernel));
+    }
+
+    #[test]
+    fn classify_picks_kernel_approval_for_denied_by_operator() {
+        let r = RuleRef {
+            id: "$kernel/approval/denied_by_operator".into(),
+            matched: true,
+        };
+        let e = classify_rule(&r);
+        let RuleKind::KernelApproval { reason } = e.kind else {
+            panic!("expected KernelApproval");
+        };
+        assert_eq!(reason.short_name, "denied_by_operator");
+        assert!(reason.display.contains("operator denied"));
+    }
+
+    #[test]
+    fn classify_kernel_approval_unknown_short_name_keeps_short_name() {
+        let r = RuleRef {
+            id: "$kernel/approval/some_future_thing".into(),
+            matched: true,
+        };
+        let e = classify_rule(&r);
+        let RuleKind::KernelApproval { reason } = e.kind else {
+            panic!("expected KernelApproval");
+        };
+        assert_eq!(reason.short_name, "some_future_thing");
+        assert!(reason.display.is_empty());
     }
 
     #[test]
@@ -434,6 +503,49 @@ mod tests {
     fn verdict_denied_as_proposed_when_no_matched_rules() {
         let v = compute_verdict(Decision::Denied, &[]);
         assert_eq!(v, Verdict::DeniedAsProposed);
+    }
+
+    #[test]
+    fn verdict_pending_when_decision_is_pending() {
+        let rules = vec![RuleEntry {
+            id: "solo-dev/shell-needs-approval".into(),
+            matched: true,
+            kind: RuleKind::Constitution,
+        }];
+        let v = compute_verdict(Decision::Pending, &rules);
+        assert_eq!(v, Verdict::Pending { rules_consulted: 1 });
+    }
+
+    #[test]
+    fn verdict_approved_when_decision_is_approved() {
+        let v = compute_verdict(Decision::Approved, &[]);
+        assert_eq!(v, Verdict::Approved);
+    }
+
+    #[test]
+    fn verdict_denied_by_operator_takes_priority_over_constitution_rule() {
+        // If a denied-by-operator approval rule fires alongside the
+        // original constitution rule that triggered Pending, the
+        // operator-denial is the more specific cause.
+        let rules = vec![
+            RuleEntry {
+                id: "solo-dev/shell-needs-approval".into(),
+                matched: true,
+                kind: RuleKind::Constitution,
+            },
+            RuleEntry {
+                id: "$kernel/approval/denied_by_operator".into(),
+                matched: true,
+                kind: RuleKind::KernelApproval {
+                    reason: ApprovalReasonInfo {
+                        short_name: "denied_by_operator".into(),
+                        display: "operator denied this action".into(),
+                    },
+                },
+            },
+        ];
+        let v = compute_verdict(Decision::Denied, &rules);
+        assert_eq!(v, Verdict::DeniedByOperator);
     }
 
     #[test]

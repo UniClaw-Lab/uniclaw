@@ -105,6 +105,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_require_approval_verdict() {
+        let toml_src = r#"
+            title = "With approval"
+            version = 1
+
+            [[rules]]
+            id = "review-shell"
+            description = "Shell exec needs operator approval."
+            verdict = "require_approval"
+            match.kind = "shell.exec"
+        "#;
+        let c = parse_toml(toml_src).expect("must parse");
+        let v = c.evaluate(&action("shell.exec", "ls"));
+        assert_eq!(v.override_decision, Some(Decision::Pending));
+    }
+
+    #[test]
     fn rejects_unknown_verdict() {
         let toml_src = r#"
             title = "Bogus"

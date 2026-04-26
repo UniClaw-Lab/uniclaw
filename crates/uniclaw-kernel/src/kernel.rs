@@ -1,14 +1,19 @@
 //! The kernel state machine.
 
+use alloc::format;
 use alloc::vec::Vec;
 
+use uniclaw_approval::ApprovalDecision;
 use uniclaw_budget::BudgetError;
 use uniclaw_constitution::Constitution;
-use uniclaw_receipt::{Decision, MerkleLeaf, RECEIPT_FORMAT_VERSION, ReceiptBody, RuleRef};
+use uniclaw_receipt::{
+    Decision, MerkleLeaf, ProvenanceEdge, RECEIPT_FORMAT_VERSION, Receipt, ReceiptBody, RuleRef,
+    crypto,
+};
 
-use crate::event::{KernelEvent, Proposal};
+use crate::event::{Approval, KernelEvent, Proposal};
 use crate::leaf::compute_leaf_hash;
-use crate::outcome::{KernelOutcome, OutcomeKind};
+use crate::outcome::{ApprovalRejection, KernelError, KernelOutcome, OutcomeKind};
 use crate::state::KernelState;
 use crate::traits::{Clock, Signer};
 
@@ -54,9 +59,16 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
     }
 
     /// Drive the state machine with one event.
-    pub fn handle(&mut self, event: KernelEvent) -> KernelOutcome {
+    ///
+    /// Returns `Err` only when an event is rejected without minting a
+    /// receipt — currently just authentication failures on
+    /// `ResolveApproval`. Honest rejections (constitution deny, budget
+    /// exhausted, operator denied) always succeed and produce a `Denied`
+    /// receipt the caller can inspect.
+    pub fn handle(&mut self, event: KernelEvent) -> Result<KernelOutcome, KernelError> {
         match event {
-            KernelEvent::EvaluateProposal(p) => self.handle_proposal(p),
+            KernelEvent::EvaluateProposal(p) => Ok(self.handle_proposal(*p)),
+            KernelEvent::ResolveApproval(a) => self.handle_resolve_approval(*a),
         }
     }
 
@@ -69,55 +81,39 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
         let mut constitution_rules =
             merge_constitution_rules(p.constitution_rules, verdict.matched_rules);
         let constitution_overrode = verdict.override_decision.is_some();
+        let constitution_set_pending = verdict.override_decision == Some(Decision::Pending);
 
-        // 2. Budget — only attempted if the constitution didn't already deny.
+        // 2. Budget — only attempted if the constitution didn't already
+        //    deny AND didn't set Pending. Pending receipts never charge
+        //    the lease; the charge happens at resolve time.
         let mut lease_after = p.lease;
         let mut budget_error: Option<BudgetError> = None;
         if final_decision != Decision::Denied
+            && !constitution_set_pending
             && let Some(lease) = lease_after.as_mut()
             && let Err(e) = lease.try_charge(&p.charge)
         {
             final_decision = Decision::Denied;
             budget_error = Some(e);
-            // Surface the budget error as a virtual rule in
-            // `constitution_rules` so the receipt — which is the only
-            // cold-verifiable artifact — is self-explaining without the
-            // KernelOutcome alongside.
             constitution_rules.push(RuleRef {
-                id: alloc::format!("$kernel/budget/{}", e.short_name()),
+                id: format!("$kernel/budget/{}", e.short_name()),
                 matched: true,
             });
         }
 
         // 3. Mint the receipt.
-        let leaf_hash = compute_leaf_hash(
-            self.state.sequence,
-            &issued_at,
-            &p.action,
-            final_decision,
-            &self.state.prev_hash,
-        );
-
-        let body = ReceiptBody {
-            schema_version: RECEIPT_FORMAT_VERSION,
+        let receipt = self.mint(
             issued_at,
-            action: p.action,
-            decision: final_decision,
+            p.action,
+            final_decision,
             constitution_rules,
-            provenance: p.provenance,
-            redactor_stack_hash: None,
-            merkle_leaf: MerkleLeaf {
-                sequence: self.state.sequence,
-                leaf_hash,
-                prev_hash: self.state.prev_hash,
-            },
-        };
-
-        let receipt = self.signer.sign(body);
-        self.state.advance(leaf_hash);
+            p.provenance,
+        );
 
         let kind = if let Some(e) = budget_error {
             OutcomeKind::DeniedByBudget(e)
+        } else if final_decision == Decision::Pending {
+            OutcomeKind::PendingApproval
         } else if constitution_overrode {
             OutcomeKind::DeniedByConstitution
         } else if final_decision == Decision::Denied {
@@ -132,17 +128,156 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             kind,
         }
     }
+
+    fn handle_resolve_approval(&mut self, a: Approval) -> Result<KernelOutcome, KernelError> {
+        // --- Authenticity gate ---
+        // 1. Pending receipt must verify under its embedded issuer.
+        if crypto::verify(&a.pending_receipt).is_err() {
+            return Err(KernelError::ResolveApprovalRejected(
+                ApprovalRejection::PendingSignatureInvalid,
+            ));
+        }
+        // 2. Issuer must be us. A receipt signed by another kernel
+        //    cannot be resolved by this one.
+        if a.pending_receipt.issuer != self.signer.public_key() {
+            return Err(KernelError::ResolveApprovalRejected(
+                ApprovalRejection::PendingIssuerMismatch,
+            ));
+        }
+        // 3. The pending receipt's decision must actually be Pending.
+        if a.pending_receipt.body.decision != Decision::Pending {
+            return Err(KernelError::ResolveApprovalRejected(
+                ApprovalRejection::NotAPendingReceipt,
+            ));
+        }
+        // 4. The original proposal's action must match the pending one.
+        //    Defends against an attacker substituting a different action
+        //    while keeping a valid pending receipt.
+        if a.original_proposal.action != a.pending_receipt.body.action {
+            return Err(KernelError::ResolveApprovalRejected(
+                ApprovalRejection::ActionMismatch,
+            ));
+        }
+
+        // --- Mint the resolution receipt ---
+        let issued_at = self.clock.now_iso8601();
+        let pending_id_hex = hex32(&a.pending_receipt.content_id().0);
+        let approval_edge = ProvenanceEdge {
+            from: format!("receipt:{pending_id_hex}"),
+            to: "decision".into(),
+            kind: "approval_response".into(),
+        };
+        let mut provenance = a.original_proposal.provenance.clone();
+        provenance.push(approval_edge);
+
+        let mut lease_after = a.original_proposal.lease;
+        let mut budget_error: Option<BudgetError> = None;
+        let mut constitution_rules: Vec<RuleRef> = Vec::new();
+        let final_decision = match a.response {
+            ApprovalDecision::Approved => {
+                // Re-check budget at approve time.
+                if let Some(lease) = lease_after.as_mut()
+                    && let Err(e) = lease.try_charge(&a.original_proposal.charge)
+                {
+                    budget_error = Some(e);
+                    constitution_rules.push(RuleRef {
+                        id: format!("$kernel/budget/{}", e.short_name()),
+                        matched: true,
+                    });
+                    Decision::Denied
+                } else {
+                    Decision::Approved
+                }
+            }
+            ApprovalDecision::Denied => {
+                constitution_rules.push(RuleRef {
+                    id: "$kernel/approval/denied_by_operator".into(),
+                    matched: true,
+                });
+                Decision::Denied
+            }
+        };
+
+        let receipt = self.mint(
+            issued_at,
+            a.original_proposal.action,
+            final_decision,
+            constitution_rules,
+            provenance,
+        );
+
+        let kind = match (a.response, budget_error) {
+            (ApprovalDecision::Approved, Some(e)) => OutcomeKind::DeniedByBudgetAtApproveTime(e),
+            (ApprovalDecision::Approved, None) => OutcomeKind::ApprovedAfterPending,
+            (ApprovalDecision::Denied, _) => OutcomeKind::DeniedByOperator,
+        };
+
+        Ok(KernelOutcome {
+            receipt,
+            lease_after,
+            kind,
+        })
+    }
+
+    fn mint(
+        &mut self,
+        issued_at: alloc::string::String,
+        action: uniclaw_receipt::Action,
+        final_decision: Decision,
+        constitution_rules: Vec<RuleRef>,
+        provenance: Vec<ProvenanceEdge>,
+    ) -> Receipt {
+        let leaf_hash = compute_leaf_hash(
+            self.state.sequence,
+            &issued_at,
+            &action,
+            final_decision,
+            &self.state.prev_hash,
+        );
+
+        let body = ReceiptBody {
+            schema_version: RECEIPT_FORMAT_VERSION,
+            issued_at,
+            action,
+            decision: final_decision,
+            constitution_rules,
+            provenance,
+            redactor_stack_hash: None,
+            merkle_leaf: MerkleLeaf {
+                sequence: self.state.sequence,
+                leaf_hash,
+                prev_hash: self.state.prev_hash,
+            },
+        };
+
+        let receipt = self.signer.sign(body);
+        self.state.advance(leaf_hash);
+        receipt
+    }
 }
 
 /// If the constitution matched any rules, the constitution is authoritative
 /// for the receipt's `constitution_rules` field. Otherwise, fall back to
 /// whatever the caller pre-populated (today this is mostly empty;
 /// future steps may carry rules from upstream layers).
-fn merge_constitution_rules(
-    caller: Vec<uniclaw_receipt::RuleRef>,
-    matched: Vec<uniclaw_receipt::RuleRef>,
-) -> Vec<uniclaw_receipt::RuleRef> {
+fn merge_constitution_rules(caller: Vec<RuleRef>, matched: Vec<RuleRef>) -> Vec<RuleRef> {
     if matched.is_empty() { caller } else { matched }
+}
+
+fn hex32(bytes: &[u8; 32]) -> alloc::string::String {
+    let mut s = alloc::string::String::with_capacity(64);
+    for &b in bytes {
+        let nib = |n: u8| -> char {
+            match n {
+                0..=9 => (b'0' + n) as char,
+                10..=15 => (b'a' + n - 10) as char,
+                _ => unreachable!(),
+            }
+        };
+        s.push(nib(b >> 4));
+        s.push(nib(b & 0xf));
+    }
+    s
 }
 
 #[cfg(test)]
@@ -168,6 +303,10 @@ mod tests {
                 issuer: uniclaw_receipt::PublicKey([0xAA; 32]),
                 signature: uniclaw_receipt::Signature([0xBB; 64]),
             }
+        }
+
+        fn public_key(&self) -> uniclaw_receipt::PublicKey {
+            uniclaw_receipt::PublicKey([0xAA; 32])
         }
     }
 
@@ -218,6 +357,18 @@ mod tests {
         }])
     }
 
+    fn require_approval_shell() -> InMemoryConstitution {
+        InMemoryConstitution::from_rules(vec![Rule {
+            id: "test/shell-needs-approval".into(),
+            description: "shell needs review".into(),
+            verdict: RuleVerdict::RequireApproval,
+            match_clause: MatchClause {
+                kind: Some("shell.exec".into()),
+                target_contains: None,
+            },
+        }])
+    }
+
     fn budget(net: u64) -> Budget {
         Budget {
             net_bytes: net,
@@ -241,7 +392,7 @@ mod tests {
     #[test]
     fn first_receipt_has_sequence_zero_and_zero_prev_hash() {
         let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
-        let out = k.handle(KernelEvent::EvaluateProposal(proposal()));
+        let out = k.handle(KernelEvent::evaluate(proposal())).expect("ok");
         assert_eq!(out.receipt.body.merkle_leaf.sequence, 0);
         assert_eq!(out.receipt.body.merkle_leaf.prev_hash, Digest([0u8; 32]));
         assert_eq!(out.kind, OutcomeKind::Allowed);
@@ -252,7 +403,7 @@ mod tests {
     fn state_advances_after_handle() {
         let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
         assert_eq!(k.state().sequence, 0);
-        let out = k.handle(KernelEvent::EvaluateProposal(proposal()));
+        let out = k.handle(KernelEvent::evaluate(proposal())).expect("ok");
         assert_eq!(k.state().sequence, 1);
         assert_eq!(k.state().prev_hash, out.receipt.body.merkle_leaf.leaf_hash);
     }
@@ -266,8 +417,8 @@ mod tests {
             },
             EmptyConstitution,
         );
-        let r1 = k.handle(KernelEvent::EvaluateProposal(proposal()));
-        let r2 = k.handle(KernelEvent::EvaluateProposal(proposal()));
+        let r1 = k.handle(KernelEvent::evaluate(proposal())).unwrap();
+        let r2 = k.handle(KernelEvent::evaluate(proposal())).unwrap();
         assert_eq!(r2.receipt.body.merkle_leaf.sequence, 1);
         assert_eq!(
             r2.receipt.body.merkle_leaf.prev_hash,
@@ -284,8 +435,8 @@ mod tests {
             },
             EmptyConstitution,
         );
-        let r1 = k.handle(KernelEvent::EvaluateProposal(proposal()));
-        let r2 = k.handle(KernelEvent::EvaluateProposal(proposal()));
+        let r1 = k.handle(KernelEvent::evaluate(proposal())).unwrap();
+        let r2 = k.handle(KernelEvent::evaluate(proposal())).unwrap();
         assert_ne!(
             r1.receipt.body.merkle_leaf.leaf_hash,
             r2.receipt.body.merkle_leaf.leaf_hash,
@@ -299,7 +450,7 @@ mod tests {
             prev_hash: Digest([0xCD; 32]),
         };
         let mut k = Kernel::resume(resumed_state, StubSigner, FixedClock, EmptyConstitution);
-        let out = k.handle(KernelEvent::EvaluateProposal(proposal()));
+        let out = k.handle(KernelEvent::evaluate(proposal())).expect("ok");
         assert_eq!(out.receipt.body.merkle_leaf.sequence, 42);
         assert_eq!(out.receipt.body.merkle_leaf.prev_hash, Digest([0xCD; 32]));
         assert_eq!(k.state().sequence, 43);
@@ -312,7 +463,7 @@ mod tests {
         p.action.kind = "shell.exec".into();
         p.decision = Decision::Allowed;
 
-        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        let out = k.handle(KernelEvent::evaluate(p)).unwrap();
         assert_eq!(out.receipt.body.decision, Decision::Denied);
         assert_eq!(out.kind, OutcomeKind::DeniedByConstitution);
     }
@@ -323,7 +474,7 @@ mod tests {
         let mut p = proposal();
         p.decision = Decision::Denied;
 
-        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        let out = k.handle(KernelEvent::evaluate(p)).unwrap();
         assert_eq!(out.receipt.body.decision, Decision::Denied);
         assert_eq!(out.kind, OutcomeKind::AllowedAsDenied);
     }
@@ -341,7 +492,7 @@ mod tests {
             charge(100),
         );
 
-        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        let out = k.handle(KernelEvent::evaluate(p)).unwrap();
         assert_eq!(out.receipt.body.decision, Decision::Allowed);
         assert_eq!(out.kind, OutcomeKind::Allowed);
 
@@ -353,7 +504,6 @@ mod tests {
     #[test]
     fn budget_exhausted_forces_denied_and_records_virtual_rule() {
         let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
-        // Lease too small for the proposed charge.
         let lease = CapabilityLease::new(LeaseId::ZERO, budget(50));
         let p = Proposal::with_lease(
             proposal().action,
@@ -364,14 +514,13 @@ mod tests {
             charge(100),
         );
 
-        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        let out = k.handle(KernelEvent::evaluate(p)).unwrap();
         assert_eq!(out.receipt.body.decision, Decision::Denied);
         assert!(matches!(
             out.kind,
             OutcomeKind::DeniedByBudget(BudgetError::NetBytesExhausted),
         ));
 
-        // Receipt is self-explaining: it lists the virtual budget rule.
         let ids: Vec<&str> = out
             .receipt
             .body
@@ -379,20 +528,14 @@ mod tests {
             .iter()
             .map(|r| r.id.as_str())
             .collect();
-        assert!(
-            ids.contains(&"$kernel/budget/net_bytes_exhausted"),
-            "expected virtual budget rule in receipt; got: {ids:?}",
-        );
+        assert!(ids.contains(&"$kernel/budget/net_bytes_exhausted"));
 
-        // Lease state is unchanged on failure.
         let after = out.lease_after.expect("lease threaded through");
         assert_eq!(after.consumed.net_bytes, 0);
     }
 
     #[test]
     fn constitution_deny_short_circuits_budget_check() {
-        // Both the constitution and the budget would deny, but the
-        // constitution fires first — lease must be untouched.
         let mut k = Kernel::new(StubSigner, FixedClock, deny_shell());
         let lease = CapabilityLease::new(LeaseId::ZERO, budget(50));
         let mut p = Proposal::with_lease(
@@ -401,16 +544,50 @@ mod tests {
             vec![],
             vec![],
             lease,
-            charge(100), // would exceed budget too
+            charge(100),
         );
         p.action.kind = "shell.exec".into();
 
-        let out = k.handle(KernelEvent::EvaluateProposal(p));
+        let out = k.handle(KernelEvent::evaluate(p)).unwrap();
         assert_eq!(out.receipt.body.decision, Decision::Denied);
         assert_eq!(out.kind, OutcomeKind::DeniedByConstitution);
 
-        // Lease not charged.
         let after = out.lease_after.expect("lease threaded through");
         assert_eq!(after.consumed.net_bytes, 0);
     }
+
+    // --- E1: approval flow ---
+
+    #[test]
+    fn require_approval_rule_yields_pending_receipt_without_charging_lease() {
+        let mut k = Kernel::new(StubSigner, FixedClock, require_approval_shell());
+        let lease = CapabilityLease::new(LeaseId::ZERO, budget(1000));
+        let p = Proposal::with_lease(
+            Action {
+                kind: "shell.exec".into(),
+                target: "ls".into(),
+                input_hash: Digest([0u8; 32]),
+            },
+            Decision::Allowed,
+            vec![],
+            vec![],
+            lease,
+            charge(100),
+        );
+
+        let out = k.handle(KernelEvent::evaluate(p)).unwrap();
+        assert_eq!(out.receipt.body.decision, Decision::Pending);
+        assert_eq!(out.kind, OutcomeKind::PendingApproval);
+
+        // Lease was NOT charged on the Pending path.
+        let after = out.lease_after.expect("lease threaded through");
+        assert_eq!(after.consumed.net_bytes, 0);
+        assert_eq!(after.remaining().net_bytes, 1000);
+    }
+
+    // The remaining approval-flow tests exercise authentic Ed25519
+    // signatures and thus live in `tests/chain.rs` where ed25519-dalek is
+    // a dev-dependency. The unit tests here use StubSigner which is not a
+    // real signer; constructing signature-valid pending receipts under it
+    // is more work than it's worth.
 }

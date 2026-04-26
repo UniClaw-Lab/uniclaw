@@ -46,3 +46,13 @@ description = "Agents may not install system packages without explicit operator 
 verdict = "deny"
 match.kind = "shell.exec"
 match.target_contains = "apt-get install"
+
+# require_approval: fire a Pending receipt and wait for the operator.
+# The kernel emits a Decision::Pending receipt; the operator resolves it
+# via a KernelEvent::ResolveApproval. See master plan §11.3.
+[[rules]]
+id = "solo-dev/git-push-needs-approval"
+description = "Pushing to a remote requires operator confirmation."
+verdict = "require_approval"
+match.kind = "shell.exec"
+match.target_contains = "git push"

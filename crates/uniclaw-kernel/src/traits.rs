@@ -7,15 +7,24 @@
 
 use alloc::string::String;
 
-use uniclaw_receipt::{Receipt, ReceiptBody};
+use uniclaw_receipt::{PublicKey, Receipt, ReceiptBody};
 
-/// Signs a receipt body. The kernel never sees raw key material.
+/// Signs a receipt body and exposes the public half of its keypair.
+///
+/// The kernel never sees raw key material. The `public_key()` method exists
+/// so the kernel can verify "did *I* sign this?" — necessary at approval-
+/// resolution time to reject fabricated pending receipts attributed to
+/// other issuers.
 ///
 /// Default ed25519 implementation lives in tests and in the future runtime
 /// crate, not here — the kernel itself is signature-algorithm-agnostic.
 pub trait Signer {
     /// Sign `body` and return a complete `Receipt` (issuer + signature).
     fn sign(&self, body: ReceiptBody) -> Receipt;
+
+    /// Public half of this signer's keypair, matching the `issuer` field
+    /// of every receipt this signer produces.
+    fn public_key(&self) -> PublicKey;
 }
 
 /// Provides the wall-clock string used for receipt `issued_at` fields.

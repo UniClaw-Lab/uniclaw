@@ -34,13 +34,19 @@ pub struct Rule {
 
 /// Outcome a rule asserts when it matches.
 ///
-/// v0 ships only `Deny`. `Allow` (whitelist) and `RequireApproval` arrive
-/// with the approval engine in a future step.
+/// v0 ships `Deny` and `RequireApproval`. `Allow` (whitelist) arrives if
+/// concrete demand for it surfaces — most rule libraries are deny-list
+/// shaped, so allow-list verdicts have not been needed yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleVerdict {
-    /// Force `Decision::Denied` for this action.
+    /// Force `Decision::Denied` for this action. Strongest verdict —
+    /// always wins over `RequireApproval` if both fire on the same action.
     Deny,
+    /// Force `Decision::Pending` so an operator must respond via a
+    /// `ResolveApproval` event before the action proceeds. Yields to
+    /// `Deny` if a deny rule also fires (safe-by-default).
+    RequireApproval,
 }
 
 /// Match conditions. **All present fields must match** for the rule to fire.

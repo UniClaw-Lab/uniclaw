@@ -12,6 +12,75 @@ format change history.
 
 ### Added
 
+- **`uniclaw-approval` crate** — operator-response semantics for `Pending`
+  receipts (master plan §11.3, §21 #7). v0 ships only the
+  `ApprovalDecision` enum (`Approved` / `Denied`); the pluggable
+  `ApprovalEngine` trait, channel-aware routing, timeout handling, and
+  adaptive promotion arrive in subsequent steps.
+- **`RuleVerdict::RequireApproval`** in `uniclaw-constitution`. Maps to
+  `Decision::Pending` from the constitution evaluator. Precedence rule:
+  `Deny` > `RequireApproval` > pass-through, so the safe-by-default
+  property holds when both verdicts match.
+- **Full approval flow in the kernel:**
+  - New `KernelEvent::ResolveApproval(Approval)` event variant.
+  - New `Approval { pending_receipt, original_proposal, response }`
+    struct. The kernel does **not** store pending state — the caller
+    holds both the pending receipt and the original proposal and
+    resubmits them when the operator decides.
+  - Authenticity gate at resolve time: verifies the pending receipt's
+    Ed25519 signature, confirms the issuer matches **this** kernel's
+    public key, confirms the body decision is `Pending`, and confirms
+    the resubmitted action matches. Forged inputs surface as
+    `KernelError::ResolveApprovalRejected(ApprovalRejection)` and
+    **do not advance the audit chain or mint a receipt**.
+  - The final receipt records a `provenance` edge
+    `{from: "receipt:<pending_id>", to: "decision", kind: "approval_response"}`
+    so cold readers can chase the cross-receipt link.
+  - Budget timing: Pending receipts **do not charge** the lease. The
+    charge happens at `Approved` time, with a fresh budget check that
+    can still mint `Denied` if the lease has been exhausted in the
+    meantime (`OutcomeKind::DeniedByBudgetAtApproveTime`).
+- **`OutcomeKind` extended** with `PendingApproval`,
+  `ApprovedAfterPending`, `DeniedByOperator`,
+  `DeniedByBudgetAtApproveTime`. **`KernelError`** introduced as the
+  return-side companion: rejections that don't produce receipts.
+- **`Signer::public_key()`** — required so the kernel can answer "did I
+  sign this pending receipt?" at resolve time without storing anything.
+- **`KernelEvent::evaluate(p)` / `KernelEvent::resolve(a)`** convenience
+  constructors so callers don't write `Box::new` everywhere.
+- **`uniclaw-explain` extended:**
+  - New `RuleKind::KernelApproval { reason }` decodes
+    `$kernel/approval/<reason>` rule IDs (today: `denied_by_operator`).
+  - New `Verdict::DeniedByOperator`. `Verdict::Pending { rules_consulted }`
+    now carries the consulted-rule count, mirroring `Allowed`.
+  - Renderer: prints "Awaiting operator approval" for `Pending`,
+    "Operator approved a previously-pending action" for `Approved`,
+    "Operator denied a previously-pending action" for the operator-
+    denied case.
+- **`constitutions/solo-dev.toml`** gains a `solo-dev/git-push-needs-approval`
+  rule demonstrating `require_approval`. (Shadowed by `solo-dev/no-shell`
+  in practice — both rules fire, deny wins, both appear in the receipt.)
+- 23 new tests across three crates (the kernel grew from 19 to 23 unit
+  tests with new approval-flow paths; integration tests grew from 5 to
+  12 covering the full round-trip + every authenticity rejection path).
+
+### Changed
+
+- **`Kernel::handle` now returns `Result<KernelOutcome, KernelError>`**
+  to honestly distinguish "honest rejection that produced a receipt"
+  (constitution deny, budget exhausted, operator denied — all keep
+  returning `Ok`) from "forged or malformed input that didn't produce
+  one" (only `Err`). Existing callers add `.expect("ok")` or `?`.
+- **`KernelEvent` variants are boxed** (`EvaluateProposal(Box<Proposal>)`,
+  `ResolveApproval(Box<Approval>)`) so the enum stays small. Use the new
+  `KernelEvent::evaluate(p)` / `KernelEvent::resolve(a)` constructors.
+
+### Performance (bench-results/, gitignored)
+
+- Pending mint only: **38.5 µs/call** (same as a normal proposal)
+- Full approval round-trip (Pending mint + ResolveApproval): **126 µs/call**
+  (~7900 ops/sec) — sign + verify + sign
+
 - **`uniclaw-explain` crate** — cold receipt explainer (master plan §21
   #13). Library + standalone CLI binary that takes any signed receipt
   and produces a human-readable decision tree without access to kernel
