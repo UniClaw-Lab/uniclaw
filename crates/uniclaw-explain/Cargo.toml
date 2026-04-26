@@ -1,0 +1,37 @@
+[package]
+name = "uniclaw-explain"
+description = "Cold receipt explainer for Uniclaw — walks any Receipt and produces a human-readable decision tree."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "uniclaw_explain"
+path = "src/lib.rs"
+
+[[bin]]
+name = "uniclaw-explain"
+path = "src/main.rs"
+
+[dependencies]
+uniclaw-receipt = { workspace = true, features = ["crypto"] }
+uniclaw-budget.workspace = true
+# Explain uses #[serde(tag, content)] which requires alloc/std machinery.
+serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }
+uniclaw-receipt = { workspace = true, features = ["crypto"] }
+
+[lints]
+workspace = true

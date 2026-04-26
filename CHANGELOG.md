@@ -12,6 +12,39 @@ format change history.
 
 ### Added
 
+- **`uniclaw-explain` crate** — cold receipt explainer (master plan §21
+  #13). Library + standalone CLI binary that takes any signed receipt
+  and produces a human-readable decision tree without access to kernel
+  state.
+  - `Explanation` struct: `receipt_id`, `canonical_url`
+    (`uniclaw://receipt/<hash>`), `issuer`, `issued_at`,
+    `SignatureStatus`, `ActionInfo`, `decision`, classified rules,
+    `Verdict`, `MerkleInfo`, provenance edges.
+  - `RuleKind` classifies each rule entry as
+    `Constitution` (operator-authored), `KernelBudget { reason }`
+    (virtual rule synthesized by the kernel), or `UnknownKernel`
+    (forward-compat for `$kernel/*` rules from a newer runtime).
+  - `Verdict` enum: `Allowed { rules_consulted }` /
+    `DeniedByConstitution { rule_id }` /
+    `DeniedByBudget { reason }` / `DeniedAsProposed` / `Approved` /
+    `Pending`. Distinct from `Decision`: `Decision` is what the
+    receipt body claims; `Verdict` is the explainer's classification
+    of *why*.
+  - `render_text` produces stable, snapshot-friendly plain-text;
+    `render_json` produces pretty JSON with the same structure for
+    tooling.
+  - CLI binary `uniclaw-explain <receipt>` with `--json` flag. Reads
+    from a file or stdin (`-`). Exits **2** on signature failure so
+    the binary is scriptable.
+  - 15 unit tests + 6 subprocess integration tests covering allowed,
+    denied-by-constitution, denied-by-budget, denied-as-proposed,
+    tampered receipts, JSON mode, malformed input.
+  - **Stripped release binary: 727 KiB** (5 KiB more than
+    `uniclaw-verify`); cold-path latency 3.67 ms/call.
+- **`uniclaw_budget::BudgetError::from_short_name`** — inverse of
+  `short_name`, single source of truth for explain tooling decoding
+  `$kernel/budget/<reason>` rule IDs.
+
 - **`uniclaw-budget` crate** — capability budget algebra (master plan
   §11 / §21 #2). Numeric grants of `net_bytes`, `file_writes`,
   `llm_tokens`, `wall_ms`, `max_uses` enforced by `CapabilityLease`.

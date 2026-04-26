@@ -488,6 +488,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "uniclaw-explain"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "uniclaw-budget",
+ "uniclaw-receipt",
+]
+
+[[package]]
 name = "uniclaw-kernel"
 version = "0.0.1"
 dependencies = [

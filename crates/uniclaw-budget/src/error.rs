@@ -38,6 +38,24 @@ impl BudgetError {
             Self::Revoked => "lease_revoked",
         }
     }
+
+    /// Inverse of `short_name`: parse a stable identifier back into a
+    /// `BudgetError`. Returns `None` for unrecognized strings so explain
+    /// tooling can fall back to a generic display when older runtimes
+    /// emit unfamiliar reasons.
+    #[must_use]
+    pub fn from_short_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "net_bytes_exhausted" => Self::NetBytesExhausted,
+            "file_writes_exhausted" => Self::FileWritesExhausted,
+            "llm_tokens_exhausted" => Self::LlmTokensExhausted,
+            "wall_time_exhausted" => Self::WallTimeExhausted,
+            "uses_exhausted" => Self::UsesExhausted,
+            "delegation_exceeds_parent" => Self::DelegationExceedsParent,
+            "lease_revoked" => Self::Revoked,
+            _ => return None,
+        })
+    }
 }
 
 impl core::fmt::Display for BudgetError {
@@ -55,3 +73,30 @@ impl core::fmt::Display for BudgetError {
 }
 
 impl core::error::Error for BudgetError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_name_round_trips() {
+        for variant in [
+            BudgetError::NetBytesExhausted,
+            BudgetError::FileWritesExhausted,
+            BudgetError::LlmTokensExhausted,
+            BudgetError::WallTimeExhausted,
+            BudgetError::UsesExhausted,
+            BudgetError::DelegationExceedsParent,
+            BudgetError::Revoked,
+        ] {
+            let s = variant.short_name();
+            assert_eq!(BudgetError::from_short_name(s), Some(variant));
+        }
+    }
+
+    #[test]
+    fn from_short_name_unknown_returns_none() {
+        assert_eq!(BudgetError::from_short_name("not_a_real_thing"), None);
+        assert_eq!(BudgetError::from_short_name(""), None);
+    }
+}
