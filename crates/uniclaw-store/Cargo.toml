@@ -1,0 +1,24 @@
+[package]
+name = "uniclaw-store"
+description = "Receipt log for Uniclaw — chain-validated, issuer-pinned audit storage."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+uniclaw-receipt = { workspace = true, features = ["crypto"] }
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }
+serde_json.workspace = true
+blake3.workspace = true
+
+[lints]
+workspace = true

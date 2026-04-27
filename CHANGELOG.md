@@ -12,6 +12,47 @@ format change history.
 
 ### Added
 
+- **`uniclaw-store` crate** — chain-validated, issuer-pinned receipt log
+  (master plan §16.1 *Audit*). Workspace member 9. The substrate Light
+  Sleep, public-URL receipt hosting, and provenance-graph queries all
+  build on.
+  - `ReceiptLog` trait — `append`, `len`, `last`, `get_by_sequence`,
+    `get_by_id`, `verify_chain`. Implementations refuse any receipt
+    that doesn't extend the chain.
+  - `AppendError` typed enum: `OutOfOrder` / `ChainBroken` /
+    `SignatureInvalid` / `IssuerMismatch` / `UnsupportedVersion` /
+    `DuplicateId`. Refused appends do **not** modify log state — the
+    invariant callers rely on for `len()` to reflect verified entries.
+  - `VerifyChainError` typed enum: `SequenceGapAt` / `BrokenAt` /
+    `SignatureInvalidAt`. Returns the **first** violation found.
+  - `InMemoryReceiptLog` — `Vec<Receipt>`-backed with `BTreeMap` index
+    for O(log n) content-id lookup. Issuer-pinned at construction so a
+    log cannot accidentally interleave receipts from multiple kernels.
+  - `IntoIterator` impl on `&InMemoryReceiptLog` for ergonomic
+    `for r in &log { … }`.
+- 13 new tests (8 unit + 4 integration + 1 from doc-test slot). The
+  integration tests drive a real Ed25519 kernel through 16 receipts
+  then prove tampering is caught by both `append` (sig invalid) and
+  `verify_chain` (storage-layer mutation after the fact).
+- 13 new tests overall (workspace count: 128 → 141).
+
+### Performance (bench-results/, gitignored)
+
+- `append` (full validation: version + issuer + sequence + chain +
+  Ed25519 verify + BTreeMap insert): **64.6 µs/call**
+- `verify_chain` on 1000-receipt log: **56.9 µs/receipt** (~57 ms total)
+- `get_by_id` (BTreeMap on 32-byte keys): **0.131 µs/lookup**
+
+### Notes
+
+- Adopt-don't-copy: issuer-pinned + append-validating chain storage in
+  this shape is net-new. `OpenFang`'s `audit.rs` records similar
+  Merkle hashes but stores them in a kernel-owned `SQLite` table; we
+  keep storage out-of-kernel and validate at the boundary. Cited in
+  `uniclaw-store/src/lib.rs`.
+- A `SqliteReceiptLog` impl arrives in a follow-up step. The trait
+  surface is designed to support both without changes.
+
 - **`uniclaw-router` crate** — channel-aware approval routing (master plan
   §21 #7). Workspace member 8.
   - `ApprovalRouter` trait — synchronous, takes `&mut self` so impls can
