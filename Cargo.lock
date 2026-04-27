@@ -533,6 +533,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "uniclaw-router"
+version = "0.0.1"
+dependencies = [
+ "ed25519-dalek",
+ "uniclaw-approval",
+ "uniclaw-constitution",
+ "uniclaw-explain",
+ "uniclaw-kernel",
+ "uniclaw-receipt",
+]
+
+[[package]]
 name = "uniclaw-verify"
 version = "0.0.1"
 dependencies = [

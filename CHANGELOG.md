@@ -12,7 +12,58 @@ format change history.
 
 ### Added
 
-- **`uniclaw-approval` crate** — operator-response semantics for `Pending`
+- **`uniclaw-router` crate** — channel-aware approval routing (master plan
+  §21 #7). Workspace member 8.
+  - `ApprovalRouter` trait — synchronous, takes `&mut self` so impls can
+    own buffered IO without interior mutability. Returns
+    `Result<ApprovalDecision, RouterError>`.
+  - `RouterError` typed enum: `Io(String)` / `InvalidInput(String)` /
+    `Cancelled` / `Backend(String)` — distinguishes IO failure from
+    operator cancellation from backend unavailability so callers can
+    react appropriately (retry, escalate, fall back).
+  - `CliApprovalRouter<R: BufRead, W: Write>` — terminal router. Renders
+    the pending receipt via `uniclaw-explain::render_text`, prompts
+    `Approve this action? (y/n)`, retries up to 3 times on bad input,
+    treats EOF as cancellation. Generic over IO so tests inject
+    `Cursor<Vec<u8>>` and the production path uses
+    `CliApprovalRouter::stdio()`.
+  - `evaluate_with_routing(kernel, router, proposal)` — single-call
+    orchestrator. Submits the proposal, routes any `PendingApproval`
+    outcome through the router, resubmits the operator's response.
+    Skips the router entirely when the proposal is decided directly
+    (Allowed / Denied / budget-exhausted).
+  - `OrchestrationError` aggregating `KernelError` + `RouterError` with
+    `From` impls for ergonomic `?`.
+  - 7 router unit tests + 2 orchestrator unit tests + 4 integration
+    tests with a real Ed25519-signing kernel and mocked stdio. All 13
+    new tests cover: y / yes / Y / YES / n / no / NO → correct decision;
+    invalid input + retry; retry-budget exhaustion; EOF → Cancelled;
+    Allowed pass-through skips router; Denied pass-through skips router;
+    Pending → operator-approves yields signed Approved receipt with
+    `approval_response` provenance edge; Pending → operator-denies yields
+    signed Denied receipt with `$kernel/approval/denied_by_operator`;
+    router error propagates as `OrchestrationError::Router`.
+- 13 new tests overall (workspace count: 115 → 128).
+
+### Notes
+
+- Adapter scarcity rule (§24.5): only the CLI router ships in this
+  release. Slack, email, webhook, mobile-notification, and other
+  backends require ≥ 10 GitHub-thumbs of demand before development
+  starts.
+- Adopt-don't-copy: pattern inspired by IronClaw's exec-approval flow
+  and OpenClaw's `deny`/`allowlist`/`ask` exec-policy modes;
+  reimplemented from spec, no source borrowed. Cited in
+  `uniclaw-router/src/lib.rs`.
+
+### Performance (bench-results/, gitignored)
+
+- `evaluate_with_routing` (CLI router, approve path): **174 µs/call**
+  (~5 700 ops/sec). Adds ~48 µs over the raw approval round-trip
+  (126 µs from PR #4) — that delta is the cost of explain-rendering
+  the pending receipt as plain text plus Cursor I/O.
+
+
   receipts (master plan §11.3, §21 #7). v0 ships only the
   `ApprovalDecision` enum (`Approved` / `Denied`); the pluggable
   `ApprovalEngine` trait, channel-aware routing, timeout handling, and

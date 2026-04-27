@@ -1,0 +1,27 @@
+[package]
+name = "uniclaw-router"
+description = "Channel-aware approval routing for Uniclaw — delivers Pending receipts to operators."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+uniclaw-receipt.workspace = true
+uniclaw-approval.workspace = true
+uniclaw-kernel.workspace = true
+uniclaw-constitution.workspace = true
+uniclaw-explain.workspace = true
+
+[dev-dependencies]
+uniclaw-receipt = { workspace = true, features = ["crypto"] }
+ed25519-dalek = { workspace = true }
+
+[lints]
+workspace = true
