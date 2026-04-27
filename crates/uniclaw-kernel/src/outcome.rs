@@ -47,6 +47,12 @@ pub enum OutcomeKind {
     /// Operator responded `Approved`, but the lease had exhausted in the
     /// meantime. Final decision is `Denied` with the budget reason.
     DeniedByBudgetAtApproveTime(BudgetError),
+    /// A Light Sleep pass completed and the kernel minted its receipt.
+    /// `failed_cleaners` counts cleaners that returned an error during
+    /// the pass — they are recorded in the receipt's provenance edges
+    /// but do not turn the outcome into a denial; Light Sleep is
+    /// best-effort.
+    LightSleepCompleted { failed_cleaners: usize },
 }
 
 /// Reasons the kernel can refuse to act on an event without minting a

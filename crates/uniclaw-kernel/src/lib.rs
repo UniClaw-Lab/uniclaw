@@ -44,3 +44,8 @@ pub use leaf::compute_leaf_hash;
 pub use outcome::{ApprovalRejection, KernelError, KernelOutcome, OutcomeKind};
 pub use state::KernelState;
 pub use traits::{Clock, Signer};
+// Re-export sleep types so kernel callers don't need a direct dependency
+// on `uniclaw-sleep` to construct `KernelEvent::RunLightSleep`.
+pub use uniclaw_sleep::{
+    Cleanable, CleanerPass, CleanupError, CleanupReport, LightSleepReport, run_light_sleep,
+};

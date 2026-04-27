@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use uniclaw_approval::ApprovalDecision;
 use uniclaw_budget::{CapabilityLease, ResourceUse};
 use uniclaw_receipt::{Action, Decision, ProvenanceEdge, Receipt, RuleRef};
+use uniclaw_sleep::LightSleepReport;
 
 /// A proposal awaiting kernel evaluation.
 ///
@@ -107,6 +108,12 @@ pub enum KernelEvent {
     /// decision. Mints a final `Approved` / `Denied` receipt that links
     /// to the pending one via a provenance edge.
     ResolveApproval(alloc::boxed::Box<Approval>),
+    /// Record a completed Light Sleep cleanup pass (master plan §16.3.1).
+    /// Mints a single receipt summarizing what each cleaner did, with one
+    /// provenance edge per cleaner. The orchestration of the pass itself
+    /// happens in `uniclaw-sleep::run_light_sleep`; the kernel only signs
+    /// the audit receipt.
+    RunLightSleep(alloc::boxed::Box<LightSleepReport>),
 }
 
 impl KernelEvent {
@@ -122,5 +129,13 @@ impl KernelEvent {
     #[must_use]
     pub fn resolve(a: Approval) -> Self {
         Self::ResolveApproval(alloc::boxed::Box::new(a))
+    }
+
+    /// Convenience constructor:
+    /// `KernelEvent::run_light_sleep(r)` instead of
+    /// `KernelEvent::RunLightSleep(Box::new(r))`.
+    #[must_use]
+    pub fn run_light_sleep(report: LightSleepReport) -> Self {
+        Self::RunLightSleep(alloc::boxed::Box::new(report))
     }
 }

@@ -7,9 +7,10 @@ use uniclaw_approval::ApprovalDecision;
 use uniclaw_budget::BudgetError;
 use uniclaw_constitution::Constitution;
 use uniclaw_receipt::{
-    Decision, MerkleLeaf, ProvenanceEdge, RECEIPT_FORMAT_VERSION, Receipt, ReceiptBody, RuleRef,
-    crypto,
+    Action, Decision, Digest, MerkleLeaf, ProvenanceEdge, RECEIPT_FORMAT_VERSION, Receipt,
+    ReceiptBody, RuleRef, crypto,
 };
+use uniclaw_sleep::LightSleepReport;
 
 use crate::event::{Approval, KernelEvent, Proposal};
 use crate::leaf::compute_leaf_hash;
@@ -69,6 +70,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
         match event {
             KernelEvent::EvaluateProposal(p) => Ok(self.handle_proposal(*p)),
             KernelEvent::ResolveApproval(a) => self.handle_resolve_approval(*a),
+            KernelEvent::RunLightSleep(r) => Ok(self.handle_light_sleep(&r)),
         }
     }
 
@@ -219,10 +221,56 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
         })
     }
 
+    fn handle_light_sleep(&mut self, report: &LightSleepReport) -> KernelOutcome {
+        let issued_at = self.clock.now_iso8601();
+        let cleaner_count = report.cleaner_count();
+        let failed_cleaners = report.failed_count();
+        let total_rows = report.total_rows_affected();
+        let total_bytes = report.total_bytes_reclaimed();
+
+        // Receipt summarizes the pass at a glance; per-cleaner detail is
+        // in the provenance edges.
+        let action = Action {
+            kind: alloc::string::String::from("$kernel/sleep/light"),
+            target: format!(
+                "cleaners={cleaner_count} rows={total_rows} bytes={total_bytes} failed={failed_cleaners}",
+            ),
+            input_hash: Digest([0u8; 32]),
+        };
+
+        // One provenance edge per cleaner. Successful cleaners use
+        // `kind = "light_sleep_pass"`; failed cleaners use
+        // `kind = "light_sleep_failure"` and carry the message in `to`.
+        let mut provenance: Vec<ProvenanceEdge> = Vec::with_capacity(cleaner_count);
+        for pass in &report.passes {
+            let edge = match &pass.outcome {
+                Ok(r) => ProvenanceEdge {
+                    from: format!("cleaner:{}", pass.name),
+                    to: format!("rows={} bytes={}", r.rows_affected, r.bytes_reclaimed),
+                    kind: "light_sleep_pass".into(),
+                },
+                Err(e) => ProvenanceEdge {
+                    from: format!("cleaner:{}", pass.name),
+                    to: format!("error: {}", e.message),
+                    kind: "light_sleep_failure".into(),
+                },
+            };
+            provenance.push(edge);
+        }
+
+        let receipt = self.mint(issued_at, action, Decision::Allowed, Vec::new(), provenance);
+
+        KernelOutcome {
+            receipt,
+            lease_after: None,
+            kind: OutcomeKind::LightSleepCompleted { failed_cleaners },
+        }
+    }
+
     fn mint(
         &mut self,
         issued_at: alloc::string::String,
-        action: uniclaw_receipt::Action,
+        action: Action,
         final_decision: Decision,
         constitution_rules: Vec<RuleRef>,
         provenance: Vec<ProvenanceEdge>,
@@ -590,4 +638,124 @@ mod tests {
     // a dev-dependency. The unit tests here use StubSigner which is not a
     // real signer; constructing signature-valid pending receipts under it
     // is more work than it's worth.
+
+    // --- H1: Light Sleep ---
+
+    use uniclaw_sleep::{CleanerPass, CleanupError, CleanupReport, LightSleepReport};
+
+    fn light_sleep_report(passes: Vec<CleanerPass>) -> LightSleepReport {
+        LightSleepReport { passes }
+    }
+
+    #[test]
+    fn empty_light_sleep_pass_still_mints_a_receipt() {
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
+        let out = k
+            .handle(KernelEvent::run_light_sleep(LightSleepReport::empty()))
+            .expect("ok");
+
+        assert_eq!(out.receipt.body.action.kind, "$kernel/sleep/light");
+        assert_eq!(
+            out.receipt.body.action.target,
+            "cleaners=0 rows=0 bytes=0 failed=0",
+        );
+        assert_eq!(out.receipt.body.decision, Decision::Allowed);
+        assert!(out.receipt.body.constitution_rules.is_empty());
+        assert!(out.receipt.body.provenance.is_empty());
+        assert_eq!(
+            out.kind,
+            OutcomeKind::LightSleepCompleted { failed_cleaners: 0 },
+        );
+        assert!(out.lease_after.is_none());
+        assert_eq!(out.receipt.body.merkle_leaf.sequence, 0);
+    }
+
+    #[test]
+    fn light_sleep_summary_aggregates_per_cleaner_totals() {
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
+        let report = light_sleep_report(vec![
+            CleanerPass {
+                name: "store/sessions".into(),
+                outcome: Ok(CleanupReport {
+                    rows_affected: 5,
+                    bytes_reclaimed: 100,
+                }),
+            },
+            CleanerPass {
+                name: "budget/leases".into(),
+                outcome: Ok(CleanupReport {
+                    rows_affected: 3,
+                    bytes_reclaimed: 50,
+                }),
+            },
+        ]);
+
+        let out = k.handle(KernelEvent::run_light_sleep(report)).unwrap();
+        assert_eq!(
+            out.receipt.body.action.target,
+            "cleaners=2 rows=8 bytes=150 failed=0",
+        );
+        assert_eq!(out.receipt.body.provenance.len(), 2);
+        assert_eq!(
+            out.receipt.body.provenance[0].from,
+            "cleaner:store/sessions"
+        );
+        assert_eq!(out.receipt.body.provenance[0].kind, "light_sleep_pass");
+        assert_eq!(out.receipt.body.provenance[1].from, "cleaner:budget/leases");
+    }
+
+    #[test]
+    fn light_sleep_records_failed_cleaners_in_provenance_and_summary() {
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
+        let report = light_sleep_report(vec![
+            CleanerPass {
+                name: "store/sessions".into(),
+                outcome: Ok(CleanupReport {
+                    rows_affected: 4,
+                    bytes_reclaimed: 80,
+                }),
+            },
+            CleanerPass {
+                name: "graph/edges".into(),
+                outcome: Err(CleanupError::new("lock contention")),
+            },
+        ]);
+
+        let out = k.handle(KernelEvent::run_light_sleep(report)).unwrap();
+        assert_eq!(
+            out.receipt.body.action.target,
+            "cleaners=2 rows=4 bytes=80 failed=1",
+        );
+        assert_eq!(
+            out.kind,
+            OutcomeKind::LightSleepCompleted { failed_cleaners: 1 },
+        );
+
+        let failure_edge = &out.receipt.body.provenance[1];
+        assert_eq!(failure_edge.kind, "light_sleep_failure");
+        assert_eq!(failure_edge.from, "cleaner:graph/edges");
+        assert_eq!(failure_edge.to, "error: lock contention");
+    }
+
+    #[test]
+    fn light_sleep_advances_chain_state_like_any_other_event() {
+        let mut k = Kernel::new(
+            StubSigner,
+            CountingClock {
+                counter: Cell::new(0),
+            },
+            EmptyConstitution,
+        );
+        let r1 = k.handle(KernelEvent::evaluate(proposal())).unwrap();
+        let r2 = k
+            .handle(KernelEvent::run_light_sleep(LightSleepReport::empty()))
+            .unwrap();
+
+        assert_eq!(r2.receipt.body.merkle_leaf.sequence, 1);
+        assert_eq!(
+            r2.receipt.body.merkle_leaf.prev_hash,
+            r1.receipt.body.merkle_leaf.leaf_hash,
+        );
+        assert_eq!(k.state().sequence, 2);
+    }
 }

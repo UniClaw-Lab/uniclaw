@@ -520,6 +520,7 @@ dependencies = [
  "uniclaw-budget",
  "uniclaw-constitution",
  "uniclaw-receipt",
+ "uniclaw-sleep",
 ]
 
 [[package]]
@@ -543,6 +544,10 @@ dependencies = [
  "uniclaw-kernel",
  "uniclaw-receipt",
 ]
+
+[[package]]
+name = "uniclaw-sleep"
+version = "0.0.1"
 
 [[package]]
 name = "uniclaw-store"

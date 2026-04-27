@@ -12,6 +12,76 @@ format change history.
 
 ### Added
 
+- **`uniclaw-sleep` crate** — Light Sleep cleanup architecture (master
+  plan §16.3.1). Workspace member 10. The Spine layer's
+  background-task surface; the kernel turns each pass into a signed
+  audit receipt.
+  - `Cleanable` trait — `name() -> &str` + `clean() -> Result<CleanupReport,
+    CleanupError>`. Subsystems implement it to participate in Light Sleep.
+    Cleaners must be idempotent and cheap; failures are recorded, not
+    propagated.
+  - `CleanupReport { rows_affected, bytes_reclaimed }` — what one cleaner
+    did. `CleanupReport::EMPTY` is the canonical no-op result for cleaners
+    that ran but found nothing to do.
+  - `LightSleepReport` — aggregated pass result with `cleaner_count`,
+    `total_rows_affected`, `total_bytes_reclaimed`, `failed_count`,
+    `all_succeeded` helpers. Order-preserving; per-cleaner outcomes
+    stay aligned with the slice the orchestrator received.
+  - `run_light_sleep(&mut [&mut dyn Cleanable]) -> LightSleepReport` —
+    sequential best-effort orchestrator. A failing cleaner is logged
+    in the report and the pass continues.
+- **Kernel: Light Sleep receipt path.**
+  - `KernelEvent::RunLightSleep(Box<LightSleepReport>)` variant +
+    `KernelEvent::run_light_sleep(report)` constructor.
+  - `OutcomeKind::LightSleepCompleted { failed_cleaners }` —
+    successful pass even when individual cleaners failed; failures
+    appear in the receipt's provenance edges, not in the kernel's
+    error path.
+  - Kernel mints one signed receipt per pass with
+    `action.kind = "$kernel/sleep/light"`,
+    `action.target = "cleaners=N rows=R bytes=B failed=F"`,
+    and one provenance edge per cleaner
+    (`from = "cleaner:<name>"`, `kind = "light_sleep_pass"` for
+    successes / `"light_sleep_failure"` for failures with the message
+    in `to`).
+  - Sleep types are re-exported through `uniclaw-kernel` so
+    downstream callers don't need a direct `uniclaw-sleep` dep just to
+    construct the event.
+- 8 new tests (4 sleep-crate unit + 4 kernel unit + 2 kernel
+  integration with real Ed25519 signatures). Integration tests prove
+  the empty-cleaner case still mints a verifiable receipt, the per-
+  cleaner provenance is faithful, and tampering provenance breaks the
+  signature.
+- Workspace test count: 141 → 155.
+
+### Why an empty pass still mints a receipt
+
+In v0 there is no persistent session state, no SQLite, and no
+provenance graph — so a Light Sleep pass with **zero registered
+cleaners** is the norm. The receipt itself is the artifact proving
+the schedule fired on time. As cleanup-needing subsystems land they
+register `Cleanable` impls and the same receipt grows real
+rows-affected counts.
+
+### Performance (bench-results/, gitignored)
+
+- Light Sleep pass, 0 cleaners: **32.65 µs/call** (just sign + leaf-hash —
+  in line with the kernel::handle baseline)
+- Light Sleep pass, 3 cleaners: **40.09 µs/call**
+- Light Sleep pass, 10 cleaners: **46.04 µs/call** (~1.3 µs/cleaner of
+  String allocation overhead for provenance edges)
+
+### Notes
+
+- Adopt-don't-copy: sleep-stage memory is net-new in this shape — none
+  of the nine reference claw runtimes have it. The cleanup-pass *idea*
+  generalizes long-known background-GC patterns from database engines
+  (`PostgreSQL`'s autovacuum, `SQLite`'s incremental VACUUM); we mirror
+  that idea, not their code. Cited in `uniclaw-sleep/src/lib.rs`.
+- REM Sleep (§16.3.2) and Deep Sleep (§16.3.3) arrive in follow-up
+  steps once their backing subsystems (provenance graph, federated
+  memory CRDT) land.
+
 - **`uniclaw-store` crate** — chain-validated, issuer-pinned receipt log
   (master plan §16.1 *Audit*). Workspace member 9. The substrate Light
   Sleep, public-URL receipt hosting, and provenance-graph queries all

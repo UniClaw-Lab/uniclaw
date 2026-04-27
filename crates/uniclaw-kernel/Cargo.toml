@@ -17,6 +17,7 @@ uniclaw-receipt = { workspace = true, features = ["crypto"] }
 uniclaw-constitution.workspace = true
 uniclaw-budget.workspace = true
 uniclaw-approval.workspace = true
+uniclaw-sleep.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 blake3.workspace = true

@@ -14,8 +14,9 @@ use uniclaw_constitution::{
     EmptyConstitution, InMemoryConstitution, MatchClause, Rule, RuleVerdict,
 };
 use uniclaw_kernel::{
-    Approval, ApprovalRejection, Clock, Kernel, KernelError, KernelEvent, OutcomeKind, Proposal,
-    Signer,
+    Approval, ApprovalRejection, Cleanable, CleanerPass, CleanupError, CleanupReport, Clock,
+    Kernel, KernelError, KernelEvent, LightSleepReport, OutcomeKind, Proposal, Signer,
+    run_light_sleep,
 };
 use uniclaw_receipt::{
     Action, Decision, Digest, ProvenanceEdge, Receipt, ReceiptBody, RuleRef, crypto,
@@ -644,6 +645,142 @@ fn approval_flow_rejects_when_action_doesnt_match_pending() {
         err,
         KernelError::ResolveApprovalRejected(ApprovalRejection::ActionMismatch),
     );
+}
+
+// --- H1: Light Sleep with real Ed25519 signatures ---
+
+struct StubSessionCleaner {
+    rows: u64,
+    bytes: u64,
+}
+
+impl Cleanable for StubSessionCleaner {
+    fn name(&self) -> &'static str {
+        "store/sessions"
+    }
+    fn clean(&mut self) -> Result<CleanupReport, CleanupError> {
+        Ok(CleanupReport {
+            rows_affected: self.rows,
+            bytes_reclaimed: self.bytes,
+        })
+    }
+}
+
+struct FailingLeaseCleaner;
+
+impl Cleanable for FailingLeaseCleaner {
+    fn name(&self) -> &'static str {
+        "budget/leases"
+    }
+    fn clean(&mut self) -> Result<CleanupReport, CleanupError> {
+        Err(CleanupError::new("storage offline"))
+    }
+}
+
+#[test]
+fn light_sleep_pass_mints_signed_receipt_that_chains() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    // First an ordinary proposal so the chain isn't at genesis when the
+    // sleep receipt mints — exercises chaining specifically.
+    let r0 = kernel
+        .handle(KernelEvent::evaluate(make_proposal(0)))
+        .expect("ok")
+        .receipt;
+
+    // Run a Light Sleep pass with two cleaners (one succeeds, one fails)
+    // and submit the report.
+    let mut a = StubSessionCleaner {
+        rows: 12,
+        bytes: 4096,
+    };
+    let mut b = FailingLeaseCleaner;
+    let report = run_light_sleep(&mut [&mut a, &mut b]);
+    assert_eq!(report.cleaner_count(), 2);
+    assert_eq!(report.failed_count(), 1);
+
+    let sleep_out = kernel
+        .handle(KernelEvent::run_light_sleep(report))
+        .expect("ok");
+
+    // The receipt verifies under the kernel's signing key — same chain
+    // discipline as every other receipt.
+    crypto::verify(&sleep_out.receipt).expect("light sleep receipt must verify");
+
+    // It chains to the previous receipt.
+    assert_eq!(
+        sleep_out.receipt.body.merkle_leaf.prev_hash,
+        r0.body.merkle_leaf.leaf_hash,
+    );
+    assert_eq!(sleep_out.receipt.body.merkle_leaf.sequence, 1);
+
+    // Action describes the pass at a glance.
+    assert_eq!(sleep_out.receipt.body.action.kind, "$kernel/sleep/light");
+    assert_eq!(
+        sleep_out.receipt.body.action.target,
+        "cleaners=2 rows=12 bytes=4096 failed=1",
+    );
+
+    // Provenance carries one edge per cleaner.
+    assert_eq!(sleep_out.receipt.body.provenance.len(), 2);
+    let success_edge = &sleep_out.receipt.body.provenance[0];
+    assert_eq!(success_edge.from, "cleaner:store/sessions");
+    assert_eq!(success_edge.kind, "light_sleep_pass");
+    assert_eq!(success_edge.to, "rows=12 bytes=4096");
+    let fail_edge = &sleep_out.receipt.body.provenance[1];
+    assert_eq!(fail_edge.from, "cleaner:budget/leases");
+    assert_eq!(fail_edge.kind, "light_sleep_failure");
+    assert_eq!(fail_edge.to, "error: storage offline");
+
+    // Outcome reports the failure count without poisoning the chain.
+    assert_eq!(
+        sleep_out.kind,
+        OutcomeKind::LightSleepCompleted { failed_cleaners: 1 },
+    );
+
+    // Tampering with the provenance must break verification.
+    let mut tampered = sleep_out.receipt.clone();
+    tampered.body.provenance[1].to = "error: redacted".into();
+    assert!(
+        crypto::verify(&tampered).is_err(),
+        "tampering provenance must break the signature",
+    );
+}
+
+#[test]
+fn empty_light_sleep_pass_is_a_meaningful_audit_event() {
+    // A Light Sleep pass with zero registered cleaners is the v0 norm —
+    // the receipt itself is the artifact proving the schedule fired.
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let report = run_light_sleep(&mut []);
+    let out = kernel
+        .handle(KernelEvent::run_light_sleep(report))
+        .expect("ok");
+
+    crypto::verify(&out.receipt).expect("empty pass still produces a verifiable receipt");
+    assert_eq!(out.receipt.body.action.kind, "$kernel/sleep/light");
+    assert!(out.receipt.body.provenance.is_empty());
+    assert_eq!(
+        out.kind,
+        OutcomeKind::LightSleepCompleted { failed_cleaners: 0 },
+    );
+
+    // Used-but-quiet placeholder — silences `unused` warnings on the
+    // imported alias when the cleaner-pass type isn't otherwise touched
+    // in this test.
+    let _: Option<CleanerPass> = None;
+    let _: Option<LightSleepReport> = None;
 }
 
 #[test]
