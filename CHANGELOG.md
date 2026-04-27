@@ -52,7 +52,7 @@ format change history.
   the empty-cleaner case still mints a verifiable receipt, the per-
   cleaner provenance is faithful, and tampering provenance breaks the
   signature.
-- Workspace test count: 141 → 155.
+- Workspace test count: 141 → 151.
 
 ### Why an empty pass still mints a receipt
 
