@@ -121,6 +121,84 @@ impl Receipt {
     }
 }
 
+/// Why a hex string could not be parsed into a fixed-size byte array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HexDecodeError {
+    /// The string had the wrong length for the target type.
+    InvalidLength { expected: usize, got: usize },
+    /// The string contained a non-hex character.
+    InvalidCharacter,
+}
+
+impl core::fmt::Display for HexDecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidLength { expected, got } => {
+                write!(f, "invalid hex length: expected {expected}, got {got}")
+            }
+            Self::InvalidCharacter => f.write_str("invalid hex character"),
+        }
+    }
+}
+
+impl core::error::Error for HexDecodeError {}
+
+impl Digest {
+    /// Encode the 32-byte digest as a 64-character lowercase hex string.
+    /// Used by the `uniclaw://receipt/<hash>` URL form and the public-URL
+    /// hosting endpoint (`/receipts/<hex>`).
+    #[must_use]
+    pub fn to_hex(&self) -> alloc::string::String {
+        let mut out = alloc::string::String::with_capacity(64);
+        for &b in &self.0 {
+            out.push(hex_nib(b >> 4));
+            out.push(hex_nib(b & 0xf));
+        }
+        out
+    }
+
+    /// Parse a 64-character lowercase or uppercase hex string into a digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns `HexDecodeError::InvalidLength` if the input is not exactly
+    /// 64 characters, or `HexDecodeError::InvalidCharacter` if it contains
+    /// a non-hex byte.
+    pub fn from_hex(s: &str) -> Result<Self, HexDecodeError> {
+        if s.len() != 64 {
+            return Err(HexDecodeError::InvalidLength {
+                expected: 64,
+                got: s.len(),
+            });
+        }
+        let bytes = s.as_bytes();
+        let mut out = [0u8; 32];
+        for i in 0..32 {
+            let hi = hex_unnib(bytes[i * 2])?;
+            let lo = hex_unnib(bytes[i * 2 + 1])?;
+            out[i] = (hi << 4) | lo;
+        }
+        Ok(Digest(out))
+    }
+}
+
+fn hex_nib(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'a' + n - 10) as char,
+        _ => unreachable!(),
+    }
+}
+
+fn hex_unnib(c: u8) -> Result<u8, HexDecodeError> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(HexDecodeError::InvalidCharacter),
+    }
+}
+
 // --- helpers for hex-encoding fixed-size arrays in JSON ---
 
 mod hex_array {
@@ -352,6 +430,43 @@ mod tests {
         let mut other = receipt.clone();
         other.body.merkle_leaf.sequence = 1;
         assert_ne!(receipt.content_id(), other.content_id());
+    }
+
+    #[test]
+    fn digest_hex_round_trips() {
+        let d = Digest([
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0a, 0x0b, 0x0c,
+        ]);
+        let hex = d.to_hex();
+        assert_eq!(hex.len(), 64);
+        assert!(hex.starts_with("deadbeef"));
+        let parsed = Digest::from_hex(&hex).unwrap();
+        assert_eq!(parsed, d);
+    }
+
+    #[test]
+    fn digest_from_hex_accepts_uppercase() {
+        let lower = Digest([0xab; 32]).to_hex();
+        let upper = lower.to_uppercase();
+        assert_eq!(Digest::from_hex(&upper).unwrap(), Digest([0xab; 32]));
+    }
+
+    #[test]
+    fn digest_from_hex_rejects_wrong_length_and_bad_chars() {
+        assert!(matches!(
+            Digest::from_hex("abcd"),
+            Err(HexDecodeError::InvalidLength {
+                expected: 64,
+                got: 4
+            }),
+        ));
+        let bad = "z".repeat(64);
+        assert_eq!(
+            Digest::from_hex(&bad),
+            Err(HexDecodeError::InvalidCharacter)
+        );
     }
 
     #[test]

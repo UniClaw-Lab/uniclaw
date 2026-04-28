@@ -12,6 +12,64 @@ format change history.
 
 ### Added
 
+- **`uniclaw-host` crate** — public-URL receipt hosting (master plan §21
+  #1, §28 Phase 2 step 1, "G1"). Workspace member 11. **First Phase 2
+  step**; first crate to depend on `std` (the trusted core remains
+  no_std-friendly).
+  - `pub fn router<L>(log: Arc<RwLock<L>>) -> axum::Router` — generic
+    over any `ReceiptLog + Send + Sync + 'static`. SQLite-backed log
+    will plug in without changes.
+  - `GET /receipts/:hash_hex` — returns the canonical receipt JSON or
+    404. Successful fetches ship `Cache-Control: public,
+    max-age=31536000, immutable` and a strong `ETag` derived from the
+    hash. Honors `If-None-Match` for 304s.
+  - `GET /healthz` — `{"ok": true, "count": <log_len>}`, `Cache-Control:
+    no-store`.
+  - `GET /` — minimal HTML index pointing at the project's GitHub.
+  - CORS permissive on every route — receipts are *meant* to be
+    verifiable from any origin.
+  - **Trust model:** the server does not re-verify receipts on serving.
+    Verification stays the client's job; that's the whole point of cold
+    verification. The receipt log already validates signatures at append
+    time (Phase 1 step 7).
+  - Bundled `uniclaw-host` binary loads `*.json` receipts from a
+    directory and serves them. Pins the log to the issuer of the first
+    loaded receipt and validates the chain on load.
+- **`Digest::to_hex` / `Digest::from_hex` on `uniclaw-receipt`** —
+  public, allocator-only hex helpers, plus `HexDecodeError` for parse
+  failures. Used by the `/receipts/<hex>` URL parser; cleaner than
+  rolling private helpers in the host crate.
+- **Stack additions (workspace deps):** `axum 0.7`, `tokio 1`,
+  `tower 0.5`, `tower-http 0.6` (cors only). All scoped to
+  `uniclaw-host`; the rest of the workspace is unaffected.
+- 10 new tests (4 hex helpers in `uniclaw-receipt` + 7 host integration
+  tests via `tower::ServiceExt::oneshot` with real Ed25519 receipts).
+  Workspace test count: 151 → 161.
+- New doc per the standing rule: `docs/steps/09-public-url-hosting.md`.
+  Roadmap and docs index updated to reflect Phase 2 in progress.
+
+### Performance (bench-results/, gitignored — release, in-process via tower::oneshot)
+
+- `GET /receipts/<known>` (200, 100-entry log): **11.30 µs**
+- `GET /receipts/<unknown>` (404): **5.07 µs**
+- `GET /receipts/<known>` + matching If-None-Match (304): **7.94 µs**
+- `GET /healthz` (1000-entry log): **3.84 µs**
+- `GET /receipts/not-a-hash` (400): **4.03 µs**
+
+Handler cost is well below typical network round-trip; the wire is the
+bottleneck, not the handler.
+
+### Notes
+
+- Adopt-don't-copy: public, content-addressed, signed-receipt hosting
+  in this shape is net-new — none of the nine reference claw runtimes
+  ship signed receipts. HTTP shape follows ordinary REST + RFC 7234/9110
+  cache conventions. Cited in `uniclaw-host/src/lib.rs`.
+- TLS, rate limiting, persistent storage, and an HTML verifier UI are
+  **deliberately deferred**. Run behind a reverse proxy for TLS; SQLite
+  log lands as a follow-up step; rate limiting will land as a `tower`
+  layer when there's a deployment that needs it.
+
 - **Beginner-friendly documentation set under `docs/`.** First doc-only PR;
   a standing rule going forward is that every implementation step ships
   with (or is followed by) a step doc in `docs/steps/`.

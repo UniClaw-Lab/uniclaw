@@ -55,16 +55,16 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 
 → See [steps/01-kernel-state-machine.md](steps/01-kernel-state-machine.md) through [steps/08-light-sleep.md](steps/08-light-sleep.md) for one page per step.
 
-## Phase 2 — Public Service 🔜 starting next
+## Phase 2 — Public Service 🚧 in progress
 
 **Goal:** make receipts publicly verifiable through a URL.
 
-**What ships:**
+**What's shipping:**
 
-- `uniclaw-host` crate — an HTTP server that serves any receipt at `/receipts/<hash>`.
-- A real, running instance at `https://uniclaw.dev/receipts/...`.
-- Optional REM Sleep (daily reflection) and Deep Sleep (weekly integrity walk) round out the sleep-stage architecture.
-- SQLite-backed receipt log so the server can hold receipts that outlive a process.
+- ✅ **`uniclaw-host` crate** — an HTTP server that serves any receipt at `/receipts/<hash>`. Step 9. See [steps/09-public-url-hosting.md](steps/09-public-url-hosting.md).
+- 🔜 A real, running instance at `https://uniclaw.dev/receipts/...`.
+- 🔜 SQLite-backed receipt log so the server can hold receipts that outlive a process.
+- 🔜 REM Sleep (daily reflection) and Deep Sleep (weekly integrity walk) round out the sleep-stage architecture.
 
 **Why it matters:** **this is the wedge made tangible.** Every prior step is infrastructure that you have to read source code to appreciate. Phase 2 is when an auditor on the other side of the world can `curl` a URL and verify a receipt.
 
@@ -152,8 +152,8 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 
 ```
 Phase 0 ✅ done
-Phase 1 ✅ done   ← you are here
-Phase 2 🔜 starting
+Phase 1 ✅ done
+Phase 2 🚧 in progress (step 9 just landed)   ← you are here
 Phase 3 ⬜ planned
 Phase 4 ⬜ planned
 Phase 5 ⬜ planned

@@ -11,6 +11,7 @@ members = [
     "crates/uniclaw-router",
     "crates/uniclaw-store",
     "crates/uniclaw-sleep",
+    "crates/uniclaw-host",
 ]
 
 [workspace.package]
@@ -36,6 +37,12 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 clap = { version = "4.5", default-features = false, features = ["std", "help", "usage", "error-context", "derive"] }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
+# Web stack — used only by uniclaw-host.
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal", "sync"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+tower-http = { version = "0.6", default-features = false, features = ["cors"] }
+
 # Internal members.
 uniclaw-receipt = { path = "crates/uniclaw-receipt", version = "0.0.1" }
 uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
@@ -46,6 +53,7 @@ uniclaw-approval = { path = "crates/uniclaw-approval", version = "0.0.1" }
 uniclaw-router = { path = "crates/uniclaw-router", version = "0.0.1" }
 uniclaw-store = { path = "crates/uniclaw-store", version = "0.0.1" }
 uniclaw-sleep = { path = "crates/uniclaw-sleep", version = "0.0.1" }
+uniclaw-host = { path = "crates/uniclaw-host", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]
