@@ -113,18 +113,18 @@ impl ReceiptLog for InMemoryReceiptLog {
         self.receipts.len()
     }
 
-    fn last(&self) -> Option<&Receipt> {
-        self.receipts.last()
+    fn last(&self) -> Option<Receipt> {
+        self.receipts.last().cloned()
     }
 
-    fn get_by_sequence(&self, sequence: u64) -> Option<&Receipt> {
+    fn get_by_sequence(&self, sequence: u64) -> Option<Receipt> {
         let idx = usize::try_from(sequence).ok()?;
-        self.receipts.get(idx)
+        self.receipts.get(idx).cloned()
     }
 
-    fn get_by_id(&self, id: &Digest) -> Option<&Receipt> {
+    fn get_by_id(&self, id: &Digest) -> Option<Receipt> {
         let position = *self.by_id.get(&id.0)?;
-        self.receipts.get(position)
+        self.receipts.get(position).cloned()
     }
 
     fn verify_chain(&self) -> Result<(), VerifyChainError> {

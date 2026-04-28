@@ -12,6 +12,7 @@ members = [
     "crates/uniclaw-store",
     "crates/uniclaw-sleep",
     "crates/uniclaw-host",
+    "crates/uniclaw-store-sqlite",
 ]
 
 [workspace.package]
@@ -43,6 +44,11 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 
+# SQLite-backed ReceiptLog — used only by uniclaw-store-sqlite (and any
+# binaries that opt into persistence). `bundled` statically links SQLite so
+# there's no system dependency; cost is ~1 MB binary size on the host crate.
+rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
+
 # Internal members.
 uniclaw-receipt = { path = "crates/uniclaw-receipt", version = "0.0.1" }
 uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
@@ -54,6 +60,7 @@ uniclaw-router = { path = "crates/uniclaw-router", version = "0.0.1" }
 uniclaw-store = { path = "crates/uniclaw-store", version = "0.0.1" }
 uniclaw-sleep = { path = "crates/uniclaw-sleep", version = "0.0.1" }
 uniclaw-host = { path = "crates/uniclaw-host", version = "0.0.1" }
+uniclaw-store-sqlite = { path = "crates/uniclaw-store-sqlite", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]
@@ -91,6 +98,13 @@ opt-level = 3
 opt-level = 3
 
 [profile.release.package.blake3]
+opt-level = 3
+
+# SQLite + libsqlite3-sys must be fully optimized or queries slow ~5-10x.
+[profile.release.package.rusqlite]
+opt-level = 3
+
+[profile.release.package.libsqlite3-sys]
 opt-level = 3
 
 # Faster builds for development without sacrificing release discipline.

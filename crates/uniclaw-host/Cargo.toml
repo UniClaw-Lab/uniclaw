@@ -15,6 +15,7 @@ categories.workspace = true
 [dependencies]
 uniclaw-receipt.workspace = true
 uniclaw-store.workspace = true
+uniclaw-store-sqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum.workspace = true

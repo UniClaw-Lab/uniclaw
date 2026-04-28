@@ -12,6 +12,72 @@ format change history.
 
 ### Added
 
+- **`uniclaw-store-sqlite` crate** — SQLite-backed `ReceiptLog` impl
+  (master plan §16.1 *Audit*, follow-up to step 7, ships as Phase 2
+  step 2 / "G2"). Workspace member 12. **Persistence**: receipts
+  survive process restarts; the public-URL host (step 9) becomes a
+  real service rather than a demo.
+  - `SqliteReceiptLog::open(path, issuer)` — opens or creates a WAL-mode
+    database, validates the schema/format/issuer pin, caches `len` and
+    `last_leaf_hash` in memory for hot-path append validation.
+  - `SqliteReceiptLog::open_in_memory(issuer)` — for tests.
+  - `SqliteReceiptLog::peek_issuer(path)` — read just the pinned issuer
+    without committing to opening; used by the `uniclaw-host` binary to
+    decide whether a fresh DB needs `UNICLAW_HOST_ISSUER` or an
+    existing DB pins it already.
+  - Same five-step append validation as `InMemoryReceiptLog`. Same
+    `verify_chain` semantics. Same issuer pin. Refused appends do not
+    mutate state.
+  - On-disk schema (version 1): `meta(key TEXT PRIMARY KEY, value BLOB)`
+    + `receipts(sequence INTEGER PRIMARY KEY, content_id BLOB UNIQUE,
+    issuer BLOB, body_json BLOB)`. Receipts are stored as canonical JSON
+    blobs — bit-perfect for cold verification.
+  - `OpenError`: `Sqlite` / `Decode` / `IssuerMismatch` /
+    `UnsupportedSchema` / `UnsupportedFormatVersion`.
+- **`uniclaw-host` binary: `--db <path>` flag.** Switches the host to
+  the SQLite backend. The two backends (`--db` for SQLite, default
+  `--receipts-dir` for in-memory JSON load) are mutually exclusive.
+  Fresh DB requires `UNICLAW_HOST_ISSUER=<64-char-hex>` to pin the
+  issuer; subsequent runs read it from the database.
+
+### Changed
+
+- **`ReceiptLog` trait — breaking change.** `last`, `get_by_sequence`,
+  and `get_by_id` now return `Option<Receipt>` (owned) instead of
+  `Option<&Receipt>`. SQLite-backed impls cannot return a borrow — the
+  row arrives as a JSON blob and the receipt is materialized fresh. The
+  in-memory impl just adds an inline `.cloned()` (~1 µs cost). The
+  `uniclaw-host` caller already cloned, so no behavior change there.
+
+### Performance (bench-results/, gitignored — release, x86_64 Linux, 1000-receipt log)
+
+|                          | InMemory  | SQLite     |
+|--------------------------|-----------|------------|
+| `append`                 | 85.19 µs  | 369.85 µs  |
+| `verify_chain` (per row) | 66.73 µs  | 62.48 µs   |
+| `get_by_id`              | 0.37 µs   | 12.35 µs   |
+
+The ~4× append slowdown is the WAL fsync; still 2,700 appends/sec.
+`verify_chain` is essentially unchanged — both backends are bottlenecked
+on Ed25519. `get_by_id` is 33× slower for SQLite, but 12 µs is invisible
+behind a network round-trip.
+
+### Notes
+
+- Adopt-don't-copy: `OpenFang`'s `audit.rs` writes Merkle-hashed audit
+  rows to a `SQLite` table inside its kernel; we keep storage
+  out-of-kernel and validate at the trait boundary. No source borrowed.
+  Cited in `uniclaw-store-sqlite/src/lib.rs`.
+- 12 new tests in `uniclaw-store-sqlite` (8 trait conformance + 4
+  persistence-specific: reopen preserves state, wrong issuer rejected,
+  duplicate id, post-facto tampering caught by `verify_chain`).
+  Workspace test count: 161 → 173.
+- `rusqlite` and `libsqlite3-sys` get `opt-level = 3` profile overrides
+  to keep query throughput in the same ballpark as the in-memory log.
+- New doc per the standing rule:
+  `docs/steps/10-sqlite-receipt-store.md`. Roadmap and docs index
+  updated.
+
 - **`uniclaw-host` crate** — public-URL receipt hosting (master plan §21
   #1, §28 Phase 2 step 1, "G1"). Workspace member 11. **First Phase 2
   step**; first crate to depend on `std` (the trusted core remains

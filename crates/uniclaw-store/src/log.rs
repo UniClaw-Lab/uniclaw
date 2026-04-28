@@ -28,13 +28,19 @@ pub trait ReceiptLog {
     }
 
     /// The most-recently-appended receipt, if any.
-    fn last(&self) -> Option<&Receipt>;
+    ///
+    /// Returns an owned `Receipt`. The trait deliberately does not borrow
+    /// from `&self` because some impls (notably `SqliteReceiptLog` in
+    /// `uniclaw-store-sqlite`) materialize receipts from a stored encoding
+    /// and have nothing to lend.
+    fn last(&self) -> Option<Receipt>;
 
-    /// Look up by `merkle_leaf.sequence`. O(1) for `InMemoryReceiptLog`.
-    fn get_by_sequence(&self, sequence: u64) -> Option<&Receipt>;
+    /// Look up by `merkle_leaf.sequence`. O(1) for `InMemoryReceiptLog`,
+    /// O(log n) PK lookup for `SqliteReceiptLog`.
+    fn get_by_sequence(&self, sequence: u64) -> Option<Receipt>;
 
     /// Look up by content id (`receipt.content_id()`).
-    fn get_by_id(&self, id: &Digest) -> Option<&Receipt>;
+    fn get_by_id(&self, id: &Digest) -> Option<Receipt>;
 
     /// Re-walk the entire stored chain and re-verify every invariant
     /// (sequence monotonicity, `prev_hash` chaining, signature on body).

@@ -199,11 +199,11 @@ where
             .into_response();
     }
 
-    // Look up under a read lock; clone the receipt out to release the lock
-    // before any encoding work. Read locks don't block other readers.
+    // Look up under a read lock; the trait returns an owned receipt so we
+    // can release the lock immediately. Read locks don't block other readers.
     let receipt = {
         let log = state.log.read().await;
-        log.get_by_id(&digest).cloned()
+        log.get_by_id(&digest)
     };
 
     let Some(receipt) = receipt else {

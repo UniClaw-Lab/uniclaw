@@ -62,8 +62,8 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 **What's shipping:**
 
 - ✅ **`uniclaw-host` crate** — an HTTP server that serves any receipt at `/receipts/<hash>`. Step 9. See [steps/09-public-url-hosting.md](steps/09-public-url-hosting.md).
+- ✅ **SQLite-backed receipt log** — persistent receipts that survive process restarts. Step 10. See [steps/10-sqlite-receipt-store.md](steps/10-sqlite-receipt-store.md).
 - 🔜 A real, running instance at `https://uniclaw.dev/receipts/...`.
-- 🔜 SQLite-backed receipt log so the server can hold receipts that outlive a process.
 - 🔜 REM Sleep (daily reflection) and Deep Sleep (weekly integrity walk) round out the sleep-stage architecture.
 
 **Why it matters:** **this is the wedge made tangible.** Every prior step is infrastructure that you have to read source code to appreciate. Phase 2 is when an auditor on the other side of the world can `curl` a URL and verify a receipt.
@@ -153,7 +153,7 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 ```
 Phase 0 ✅ done
 Phase 1 ✅ done
-Phase 2 🚧 in progress (step 9 just landed)   ← you are here
+Phase 2 🚧 in progress (steps 9 + 10 landed)  ← you are here
 Phase 3 ⬜ planned
 Phase 4 ⬜ planned
 Phase 5 ⬜ planned

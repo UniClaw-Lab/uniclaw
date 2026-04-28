@@ -1,29 +1,49 @@
-//! `uniclaw-host` — small server that serves receipts from a directory.
+//! `uniclaw-host` — small server that serves Uniclaw receipts.
 //!
-//! Loads every `*.json` file under `--receipts-dir` into an in-memory log
-//! at startup, validates the chain, and binds an HTTP listener on
-//! `--bind`. Useful for demos and as a reference impl until the
-//! SQLite-backed receipt log lands.
+//! Two backends:
+//!
+//! - **`--db <path>`** (recommended): persistent `SqliteReceiptLog`. Survives
+//!   restarts. Required for any real deployment. On first run, the issuer
+//!   is read from the `UNICLAW_HOST_ISSUER` env var (64-char hex) and
+//!   pinned into the database.
+//! - **`--receipts-dir <dir>`** (default, in-memory): loads every `*.json`
+//!   file at startup, sorts by sequence, replays into an
+//!   `InMemoryReceiptLog`. Good for demos and tests; loses everything on
+//!   restart.
+//!
+//! Both modes serve the same axum router from `uniclaw-host` (lib).
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use tokio::sync::RwLock;
 
 use uniclaw_host::router;
 use uniclaw_receipt::{PublicKey, Receipt};
 use uniclaw_store::{InMemoryReceiptLog, ReceiptLog};
+use uniclaw_store_sqlite::SqliteReceiptLog;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "uniclaw-host",
     about = "Serve Uniclaw receipts at uniclaw://receipt/<hash> over HTTP."
 )]
+#[command(group(
+    ArgGroup::new("backend")
+        .args(["db", "receipts_dir"])
+        .multiple(false)
+        .required(false)
+))]
 struct Args {
-    /// Directory of `*.json` receipt files to load at startup.
+    /// Persistent SQLite-backed receipt log. Survives restarts.
+    /// On first run set `UNICLAW_HOST_ISSUER=<64-hex>` to pin the log.
+    #[arg(long)]
+    db: Option<PathBuf>,
+
+    /// Directory of `*.json` receipts (in-memory backend, default mode).
     #[arg(long, default_value = "./receipts")]
     receipts_dir: PathBuf,
 
@@ -36,15 +56,35 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let log = load_receipts_dir(&args.receipts_dir)
-        .with_context(|| format!("loading receipts from {}", args.receipts_dir.display()))?;
+    if let Some(db_path) = args.db.as_deref() {
+        let issuer = read_or_require_issuer(db_path)?;
+        let log = SqliteReceiptLog::open(db_path, issuer)
+            .with_context(|| format!("opening SQLite log at {}", db_path.display()))?;
+        serve("sqlite", db_path.display().to_string(), args.bind, log).await
+    } else {
+        let log = load_receipts_dir(&args.receipts_dir)
+            .with_context(|| format!("loading receipts from {}", args.receipts_dir.display()))?;
+        serve(
+            "in-memory",
+            args.receipts_dir.display().to_string(),
+            args.bind,
+            log,
+        )
+        .await
+    }
+}
+
+async fn serve<L>(backend: &str, source: String, bind: SocketAddr, log: L) -> Result<()>
+where
+    L: ReceiptLog + Send + Sync + 'static,
+{
     let count = log.len();
     let issuer = log.issuer();
-
     let app = router(Arc::new(RwLock::new(log)));
 
-    let listener = tokio::net::TcpListener::bind(args.bind).await?;
+    let listener = tokio::net::TcpListener::bind(bind).await?;
     let local = listener.local_addr()?;
+
     let issuer_prefix = {
         let mut s = String::with_capacity(8);
         for b in &issuer.0[0..4] {
@@ -54,7 +94,8 @@ async fn main() -> Result<()> {
         s
     };
     eprintln!(
-        "uniclaw-host: serving {count} receipt(s) (issuer {issuer_prefix}) on http://{local}"
+        "uniclaw-host: backend={backend} source={source} \
+         serving {count} receipt(s) (issuer {issuer_prefix}…) on http://{local}"
     );
 
     axum::serve(listener, app)
@@ -67,13 +108,30 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Resolve the issuer for a SQLite-backed log:
+///
+/// - If the DB already pins an issuer, use it (and ignore the env var,
+///   which would otherwise let an operator silently re-pin and lose
+///   chain continuity).
+/// - Otherwise (fresh DB), require `UNICLAW_HOST_ISSUER` to be set.
+fn read_or_require_issuer(db_path: &Path) -> Result<PublicKey> {
+    if let Some(existing) = SqliteReceiptLog::peek_issuer(db_path)
+        .context("inspecting existing SQLite log for pinned issuer")?
+    {
+        return Ok(existing);
+    }
+    let s = std::env::var("UNICLAW_HOST_ISSUER")
+        .context("fresh SQLite log; set UNICLAW_HOST_ISSUER=<64-hex> to pin it")?;
+    let bytes = uniclaw_receipt::Digest::from_hex(&s)
+        .context("UNICLAW_HOST_ISSUER must be 64 hex characters")?;
+    Ok(PublicKey(bytes.0))
+}
+
 fn load_receipts_dir(dir: &PathBuf) -> Result<InMemoryReceiptLog> {
     if !dir.is_dir() {
         bail!("{} is not a directory", dir.display());
     }
 
-    // Read every *.json file, sort by the receipt's sequence so the chain
-    // appends in order, then construct the log.
     let mut entries: Vec<(u64, Receipt)> = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let entry = entry?;
@@ -89,14 +147,11 @@ fn load_receipts_dir(dir: &PathBuf) -> Result<InMemoryReceiptLog> {
     entries.sort_by_key(|(seq, _)| *seq);
 
     if entries.is_empty() {
-        // Empty log is fine — useful for demoing /healthz against an empty
-        // store. Caller picks the issuer key in that case via env var.
-        let issuer = pin_issuer_from_env()?;
+        let issuer = pin_issuer_from_env()
+            .context("empty receipts dir; set UNICLAW_HOST_ISSUER=<64-hex> to pin the log")?;
         return Ok(InMemoryReceiptLog::new(issuer));
     }
 
-    // Pin the log to the issuer of the first receipt; append validates
-    // every subsequent receipt against the pinned issuer + chain.
     let pinned = entries[0].1.issuer;
     let mut log = InMemoryReceiptLog::new(pinned);
     for (_, r) in entries {
@@ -107,11 +162,7 @@ fn load_receipts_dir(dir: &PathBuf) -> Result<InMemoryReceiptLog> {
 }
 
 fn pin_issuer_from_env() -> Result<PublicKey> {
-    // For an empty log, a public key has to come from somewhere. Read it
-    // from `UNICLAW_HOST_ISSUER` (64-char hex). If unset, refuse to start
-    // — silently picking a zero key would be a security smell.
-    let s = std::env::var("UNICLAW_HOST_ISSUER")
-        .context("empty receipts dir; set UNICLAW_HOST_ISSUER=<64-hex> to pin the log")?;
+    let s = std::env::var("UNICLAW_HOST_ISSUER")?;
     let bytes = uniclaw_receipt::Digest::from_hex(&s)
         .context("UNICLAW_HOST_ISSUER must be 64 hex characters")?;
     Ok(PublicKey(bytes.0))
