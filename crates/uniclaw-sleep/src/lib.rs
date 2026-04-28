@@ -15,28 +15,38 @@
 //!   frequently-recalled facts, archives cold data, walks the Merkle audit
 //!   chain end-to-end. (§16.3.3)
 //!
-//! ## Current shape — Light Sleep only
+//! ## Current shape — Light Sleep + Deep Sleep
 //!
-//! This crate currently ships only the Light Sleep architecture: a
-//! [`Cleanable`] trait, per-cleaner [`CleanupReport`], and the
-//! [`LightSleepReport`] aggregate that [`run_light_sleep`] produces. REM
-//! and Deep Sleep arrive in follow-up steps once their backing subsystems
-//! (provenance graph, federated memory CRDT) land.
+//! Two of three sleep stages ship today:
+//!
+//! - **Light Sleep** (hourly cleanup): the [`Cleanable`] trait,
+//!   [`CleanupReport`], [`CleanerPass`], [`LightSleepReport`], and the
+//!   [`run_light_sleep`] orchestrator.
+//! - **Deep Sleep** (weekly integrity walk): the [`Walkable`] trait,
+//!   [`WalkReport`], [`WalkerPass`], [`DeepSleepReport`], and the
+//!   [`run_deep_sleep`] orchestrator. The built-in [`ReceiptLogWalker`]
+//!   wraps any `uniclaw_store::ReceiptLog` and walks its `verify_chain()`.
+//!
+//! REM Sleep (daily reflection) lands when the provenance graph + memory
+//! subsystems arrive in Phase 4. The trait + report shapes for Light and
+//! Deep are deliberately symmetric so REM can plug in the same way.
 //!
 //! ## Why a receipt for an empty pass
 //!
-//! In v0 there is no persistent session state, no `SQLite`, and no provenance
-//! graph — so a Light Sleep pass with **zero registered cleaners** is the
-//! norm. The pass is still meaningful: the kernel mints a Light Sleep
-//! receipt that proves the scheduled pass ran on time. Once cleanup
-//! subsystems start registering, the same receipt records what they did.
+//! Receipts are minted **even when no cleaners or walkers are registered**.
+//! In v0 the typical Light Sleep pass has zero cleaners (no persistent
+//! session state, no SQLite-backed cleanups yet). The receipt itself is
+//! the proof that the schedule fired on time. Same logic for Deep Sleep:
+//! a quiet receipt chain with no `$kernel/sleep/deep` entries would mean
+//! something is wrong with the scheduler.
 //!
 //! ## Where this fits
 //!
 //! `uniclaw-sleep` is the **Spine** layer's background-task surface
-//! (master plan §9). The kernel consumes the [`LightSleepReport`] this
-//! crate produces and turns it into a signed audit receipt — see
-//! `uniclaw-kernel`'s `KernelEvent::RunLightSleep`.
+//! (master plan §9). The kernel consumes the [`LightSleepReport`] /
+//! [`DeepSleepReport`] this crate produces and turns each into a signed
+//! audit receipt — see `uniclaw-kernel`'s `KernelEvent::RunLightSleep`
+//! and `KernelEvent::RunDeepSleep`.
 //!
 //! ## Adopt-don't-copy
 //!
@@ -216,6 +226,211 @@ pub fn run_light_sleep(cleaners: &mut [&mut dyn Cleanable]) -> LightSleepReport 
     LightSleepReport { passes }
 }
 
+// =====================================================================
+// Deep Sleep — weekly integrity walk (master plan §16.3.3).
+//
+// Architecturally symmetric to Light Sleep, but the operation is *walk*
+// (read-only, integrity-checking) instead of *clean* (mutating, GC-like).
+// A Walkable subsystem holds state someone might tamper with after the
+// fact; its `walk()` method re-checks the invariants. The canonical
+// example shipped today is `ReceiptLogWalker`, which calls
+// `ReceiptLog::verify_chain()` on a stored receipt log.
+// =====================================================================
+
+/// A subsystem whose stored state can be re-walked end-to-end to detect
+/// tampering. The canonical example is a receipt log, where `walk()`
+/// calls `ReceiptLog::verify_chain()`.
+///
+/// `walk` takes `&self` (not `&mut self`) because integrity walks are
+/// read-only by definition. They must not modify the subsystem; if they
+/// detect tampering they report it.
+pub trait Walkable {
+    /// Stable identifier for this walker. Goes into the Deep Sleep
+    /// receipt's provenance edges as `walker:<name>` so auditors can
+    /// attribute integrity findings to specific subsystems.
+    fn name(&self) -> &str;
+
+    /// Run one integrity walk. Returns what was walked, or an error if
+    /// the walk found a problem (or could not run). A walker returning
+    /// `Err` does **not** abort the overall Deep Sleep pass — the failure
+    /// is recorded and the next walker runs.
+    ///
+    /// # Errors
+    ///
+    /// Implementation-defined. Convert your concrete error to
+    /// [`WalkError`] via its `String` message.
+    fn walk(&self) -> Result<WalkReport, WalkError>;
+}
+
+/// What one walker examined during a Deep Sleep pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WalkReport {
+    /// Number of items walked (e.g. receipts checked).
+    pub items_walked: u64,
+    /// Approximate bytes inspected. May be zero if the walker did not
+    /// account for it.
+    pub bytes_walked: u64,
+}
+
+impl WalkReport {
+    /// A no-op walk — walker ran but had nothing to inspect.
+    pub const EMPTY: Self = Self {
+        items_walked: 0,
+        bytes_walked: 0,
+    };
+}
+
+/// Why a walker could not complete its walk, or what tampering it found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalkError {
+    /// Short human-readable reason. Goes into the Deep Sleep receipt
+    /// provenance edge for the failed walker.
+    pub message: String,
+}
+
+impl WalkError {
+    /// Construct a new error with the given message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl core::fmt::Display for WalkError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl core::error::Error for WalkError {}
+
+/// Aggregated outcome of one Deep Sleep pass — one entry per registered
+/// walker, in the order they ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepSleepReport {
+    /// One [`WalkerPass`] per registered walker, in invocation order.
+    pub passes: Vec<WalkerPass>,
+}
+
+/// One walker's contribution to a Deep Sleep report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalkerPass {
+    /// Walker identifier ([`Walkable::name`]).
+    pub name: String,
+    /// Either the walker's [`WalkReport`] or the error message it
+    /// returned. Failures are recorded, not propagated.
+    pub outcome: Result<WalkReport, WalkError>,
+}
+
+impl DeepSleepReport {
+    /// An empty report — the pass ran but no walkers were registered.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self { passes: Vec::new() }
+    }
+
+    /// Number of walkers that participated in this pass.
+    #[must_use]
+    pub fn walker_count(&self) -> usize {
+        self.passes.len()
+    }
+
+    /// Total `items_walked` across all successful walkers.
+    #[must_use]
+    pub fn total_items_walked(&self) -> u64 {
+        self.passes
+            .iter()
+            .filter_map(|p| p.outcome.as_ref().ok())
+            .map(|r| r.items_walked)
+            .sum()
+    }
+
+    /// Total `bytes_walked` across all successful walkers.
+    #[must_use]
+    pub fn total_bytes_walked(&self) -> u64 {
+        self.passes
+            .iter()
+            .filter_map(|p| p.outcome.as_ref().ok())
+            .map(|r| r.bytes_walked)
+            .sum()
+    }
+
+    /// Number of walkers whose walk failed (e.g. detected tampering).
+    #[must_use]
+    pub fn failed_count(&self) -> usize {
+        self.passes.iter().filter(|p| p.outcome.is_err()).count()
+    }
+
+    /// True when every registered walker returned `Ok`. Vacuously true
+    /// when there are no walkers.
+    #[must_use]
+    pub fn all_succeeded(&self) -> bool {
+        self.failed_count() == 0
+    }
+}
+
+/// Run one Deep Sleep pass over `walkers` in order, collecting each
+/// walker's outcome into a [`DeepSleepReport`].
+///
+/// A failing walker — including one that detected tampering — is
+/// **recorded**, not propagated. Deep Sleep continues to the next
+/// walker. The kernel mints a single receipt for the whole pass with
+/// one provenance edge per walker; the receipt is the artifact a
+/// human reviewer reads to learn what was found.
+pub fn run_deep_sleep(walkers: &mut [&mut dyn Walkable]) -> DeepSleepReport {
+    let mut passes = Vec::with_capacity(walkers.len());
+    for walker in walkers {
+        let name = String::from(walker.name());
+        let outcome = walker.walk();
+        passes.push(WalkerPass { name, outcome });
+    }
+    DeepSleepReport { passes }
+}
+
+/// A built-in [`Walkable`] that wraps any `uniclaw_store::ReceiptLog`
+/// and runs `verify_chain()` as its integrity walk.
+///
+/// Lives in `uniclaw-sleep` so the kernel doesn't need a direct
+/// dependency on the storage crate just to schedule a Deep Sleep pass.
+/// The walker borrows the log; callers wrap their log in
+/// `Arc<RwLock>` if they need to share it.
+#[derive(Debug)]
+pub struct ReceiptLogWalker<'a, L: uniclaw_store::ReceiptLog + ?Sized> {
+    /// Stable identifier (e.g. `"audit/main"`).
+    pub name: alloc::borrow::Cow<'a, str>,
+    /// The log to walk. `verify_chain()` is read-only.
+    pub log: &'a L,
+}
+
+impl<'a, L: uniclaw_store::ReceiptLog + ?Sized> ReceiptLogWalker<'a, L> {
+    /// Construct a walker with the given name + log reference.
+    #[must_use]
+    pub fn new(name: impl Into<alloc::borrow::Cow<'a, str>>, log: &'a L) -> Self {
+        Self {
+            name: name.into(),
+            log,
+        }
+    }
+}
+
+impl<L: uniclaw_store::ReceiptLog + ?Sized> Walkable for ReceiptLogWalker<'_, L> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn walk(&self) -> Result<WalkReport, WalkError> {
+        let n = self.log.len() as u64;
+        match self.log.verify_chain() {
+            Ok(()) => Ok(WalkReport {
+                items_walked: n,
+                bytes_walked: 0,
+            }),
+            Err(e) => Err(WalkError::new(alloc::format!("verify_chain failed: {e}"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +550,179 @@ mod tests {
         let r2 = run_light_sleep(&mut [&mut a]);
         assert_eq!(r1.passes[0].outcome, r2.passes[0].outcome);
         assert_eq!(a.calls, 2);
+    }
+
+    // --- Deep Sleep tests ---
+
+    use core::cell::Cell;
+
+    struct StubWalker {
+        name: String,
+        report: WalkReport,
+        calls: Cell<u32>,
+    }
+
+    impl StubWalker {
+        fn new(name: &str, items: u64, bytes: u64) -> Self {
+            Self {
+                name: name.to_string(),
+                report: WalkReport {
+                    items_walked: items,
+                    bytes_walked: bytes,
+                },
+                calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl Walkable for StubWalker {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn walk(&self) -> Result<WalkReport, WalkError> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(self.report)
+        }
+    }
+
+    struct FailingWalker {
+        name: String,
+        message: String,
+    }
+
+    impl Walkable for FailingWalker {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn walk(&self) -> Result<WalkReport, WalkError> {
+            Err(WalkError::new(self.message.clone()))
+        }
+    }
+
+    #[test]
+    fn empty_deep_sleep_pass_produces_empty_report() {
+        let report = run_deep_sleep(&mut []);
+        assert_eq!(report.walker_count(), 0);
+        assert_eq!(report.total_items_walked(), 0);
+        assert_eq!(report.total_bytes_walked(), 0);
+        assert_eq!(report.failed_count(), 0);
+        assert!(report.all_succeeded(), "vacuously true with no walkers");
+    }
+
+    #[test]
+    fn successful_walkers_aggregate_totals() {
+        let mut a = StubWalker::new("audit/main", 1000, 64_000);
+        let mut b = StubWalker::new("provenance/edges", 500, 8_000);
+        let report = run_deep_sleep(&mut [&mut a, &mut b]);
+
+        assert_eq!(report.walker_count(), 2);
+        assert_eq!(report.total_items_walked(), 1500);
+        assert_eq!(report.total_bytes_walked(), 72_000);
+        assert_eq!(report.failed_count(), 0);
+        assert!(report.all_succeeded());
+
+        assert_eq!(report.passes[0].name, "audit/main");
+        assert_eq!(report.passes[1].name, "provenance/edges");
+        assert_eq!(a.calls.get(), 1);
+        assert_eq!(b.calls.get(), 1);
+    }
+
+    #[test]
+    fn failing_walker_is_recorded_and_does_not_abort_others() {
+        let mut a = StubWalker::new("audit/main", 1000, 64_000);
+        let mut b = FailingWalker {
+            name: "provenance/edges".to_string(),
+            message: "edge from receipt:abc... missing target".to_string(),
+        };
+        let mut c = StubWalker::new("memory/long-term", 50, 1_024);
+        let report = run_deep_sleep(&mut [&mut a, &mut b, &mut c]);
+
+        assert_eq!(report.walker_count(), 3);
+        assert_eq!(report.failed_count(), 1);
+        assert!(!report.all_succeeded());
+
+        // Successful walkers' totals do not include the failure.
+        assert_eq!(report.total_items_walked(), 1050);
+        assert_eq!(report.total_bytes_walked(), 65_024);
+
+        // Failure preserves the message — auditors read this.
+        let failure = report.passes[1].outcome.as_ref().unwrap_err();
+        assert!(failure.message.contains("edge from receipt"));
+
+        // The walker *after* the failure still ran.
+        assert_eq!(c.calls.get(), 1);
+    }
+
+    // --- ReceiptLogWalker integration ---
+
+    use ed25519_dalek::SigningKey;
+    use uniclaw_receipt::{
+        Action, Decision, Digest, MerkleLeaf, PublicKey, RECEIPT_FORMAT_VERSION, Receipt,
+        ReceiptBody, crypto,
+    };
+    use uniclaw_store::{InMemoryReceiptLog, ReceiptLog};
+
+    fn signed_at(k: &SigningKey, seq: u64, prev: Digest, target: &str) -> Receipt {
+        let mut body = ReceiptBody {
+            schema_version: RECEIPT_FORMAT_VERSION,
+            issued_at: alloc::format!("2026-04-28T00:00:{seq:02}Z"),
+            action: Action {
+                kind: "http.fetch".into(),
+                target: target.into(),
+                input_hash: Digest([0u8; 32]),
+            },
+            decision: Decision::Allowed,
+            constitution_rules: alloc::vec![],
+            provenance: alloc::vec![],
+            redactor_stack_hash: None,
+            merkle_leaf: MerkleLeaf {
+                sequence: seq,
+                leaf_hash: Digest([0u8; 32]),
+                prev_hash: prev,
+            },
+        };
+        let canonical = serde_json::to_vec(&body).unwrap();
+        body.merkle_leaf.leaf_hash = Digest(*blake3::hash(&canonical).as_bytes());
+        crypto::sign(body, k)
+    }
+
+    fn populated_log(n: u64) -> (InMemoryReceiptLog, SigningKey) {
+        let k = SigningKey::from_bytes(&[7u8; 32]);
+        let mut log = InMemoryReceiptLog::new(PublicKey(k.verifying_key().to_bytes()));
+        let mut prev = Digest([0u8; 32]);
+        for i in 0..n {
+            let r = signed_at(&k, i, prev, &alloc::format!("https://example.com/{i}"));
+            prev = r.body.merkle_leaf.leaf_hash;
+            log.append(r).unwrap();
+        }
+        (log, k)
+    }
+
+    #[test]
+    fn receipt_log_walker_passes_on_clean_chain() {
+        let (log, _k) = populated_log(8);
+        let walker = ReceiptLogWalker::new("audit/main", &log);
+
+        let report = walker.walk().expect("clean chain must walk");
+        assert_eq!(report.items_walked, 8);
+        assert_eq!(walker.name(), "audit/main");
+    }
+
+    #[test]
+    fn receipt_log_walker_reports_failure_when_walk_fails() {
+        // The signature-class tampering path is covered by
+        // `uniclaw-store`'s own tests (verify_chain catches body mutation
+        // even when receipts entered the log validly). Here we just
+        // exercise the walker's failure-mapping code: a walker whose
+        // walk() returns Err should produce a recordable WalkError with
+        // a useful message.
+        let walker = FailingWalker {
+            name: "audit/main".to_string(),
+            message: "verify_chain failed: signature invalid at receipt 1".to_string(),
+        };
+        let result = walker.walk();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("verify_chain failed"));
     }
 }

@@ -12,6 +12,59 @@ format change history.
 
 ### Added
 
+- **Deep Sleep integrity walk** (master plan §16.3.3, ships as Phase 2
+  step 3). The second sleep stage. Symmetric to Light Sleep but for
+  read-only integrity checks instead of mutating cleanup.
+  - `uniclaw-sleep` gains a `Walkable` trait, `WalkReport` (+ `EMPTY`),
+    `WalkError`, `WalkerPass`, `DeepSleepReport`, and the
+    `run_deep_sleep` orchestrator. Best-effort: a failing walker is
+    recorded, not propagated.
+  - Built-in `ReceiptLogWalker<'_, L: ReceiptLog>` wraps any
+    `ReceiptLog` and runs `verify_chain()` as its walk.
+  - **Kernel** gains `KernelEvent::RunDeepSleep(Box<DeepSleepReport>)`
+    + `KernelEvent::run_deep_sleep(report)` ctor +
+    `OutcomeKind::DeepSleepCompleted { failed_walkers }`. Mints a
+    receipt with `action.kind = "$kernel/sleep/deep"`,
+    `action.target = "walkers=N items=M bytes=B failed=F"`, and one
+    provenance edge per walker (`deep_sleep_pass` for OK,
+    `deep_sleep_failure` with the message in `to` for Err).
+  - Sleep types are re-exported through `uniclaw-kernel` so callers
+    don't need a direct `uniclaw-sleep` dep.
+  - **2 of 3 sleep stages now ship.** REM Sleep waits until Phase 4
+    (provenance graph + memory subsystems).
+- 11 new tests (4 in `uniclaw-sleep` unit + 4 in `uniclaw-kernel`
+  unit + 2 integration with real Ed25519 + ReceiptLogWalker over a
+  signed log + 1 baseline). Workspace test count: 173 → 184.
+- New doc per the standing rule:
+  `docs/steps/11-deep-sleep.md`. Roadmap and docs index updated.
+
+### Performance (bench-results/, gitignored — release, x86_64 Linux)
+
+`run_deep_sleep` over a single `ReceiptLogWalker`:
+
+| Chain length | Per-pass | Per-receipt |
+|---|---|---|
+| 100   | 5.0 ms | 50.1 µs |
+| 1,000 | 54.1 ms | 54.1 µs |
+| 10,000 | 530 ms | 53.0 µs |
+
+Linear in chain length; per-receipt cost is dominated by Ed25519 verify
+(~52 µs warm). A million-receipt chain takes ~52 seconds — comfortable
+for weekly Deep Sleep.
+
+### Notes
+
+- Adopt-don't-copy: integrity-walk-as-receipt is net-new — no other
+  claw runtime has a sleep-stage architecture, let alone one that
+  mints signed audit receipts for the walks themselves. Cited in
+  `uniclaw-sleep/src/lib.rs` (Postgres autovacuum / SQLite VACUUM are
+  conceptual references for cleanup-style passes; integrity walks are
+  ours).
+- **`Walkable::walk` takes `&self`**, not `&mut self`, by design:
+  integrity walks are read-only. Conflating walkers with cleaners
+  would let a "walker" silently rewrite the chain it was supposed to
+  audit — security smell avoided.
+
 - **`uniclaw-store-sqlite` crate** — SQLite-backed `ReceiptLog` impl
   (master plan §16.1 *Audit*, follow-up to step 7, ships as Phase 2
   step 2 / "G2"). Workspace member 12. **Persistence**: receipts

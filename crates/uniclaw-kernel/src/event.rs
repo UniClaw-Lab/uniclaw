@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use uniclaw_approval::ApprovalDecision;
 use uniclaw_budget::{CapabilityLease, ResourceUse};
 use uniclaw_receipt::{Action, Decision, ProvenanceEdge, Receipt, RuleRef};
-use uniclaw_sleep::LightSleepReport;
+use uniclaw_sleep::{DeepSleepReport, LightSleepReport};
 
 /// A proposal awaiting kernel evaluation.
 ///
@@ -114,6 +114,12 @@ pub enum KernelEvent {
     /// happens in `uniclaw-sleep::run_light_sleep`; the kernel only signs
     /// the audit receipt.
     RunLightSleep(alloc::boxed::Box<LightSleepReport>),
+    /// Record a completed Deep Sleep integrity walk (master plan §16.3.3).
+    /// Mints a single receipt summarizing each walker's outcome, with one
+    /// provenance edge per walker. The orchestration happens in
+    /// `uniclaw-sleep::run_deep_sleep`; the kernel only signs the audit
+    /// receipt that proves the walk ran and what it found.
+    RunDeepSleep(alloc::boxed::Box<DeepSleepReport>),
 }
 
 impl KernelEvent {
@@ -137,5 +143,13 @@ impl KernelEvent {
     #[must_use]
     pub fn run_light_sleep(report: LightSleepReport) -> Self {
         Self::RunLightSleep(alloc::boxed::Box::new(report))
+    }
+
+    /// Convenience constructor:
+    /// `KernelEvent::run_deep_sleep(r)` instead of
+    /// `KernelEvent::RunDeepSleep(Box::new(r))`.
+    #[must_use]
+    pub fn run_deep_sleep(report: DeepSleepReport) -> Self {
+        Self::RunDeepSleep(alloc::boxed::Box::new(report))
     }
 }

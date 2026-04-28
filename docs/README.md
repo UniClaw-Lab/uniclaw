@@ -33,6 +33,7 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 | 8 | Light Sleep Cleanup | Phase 1 | [steps/08-light-sleep.md](steps/08-light-sleep.md) |
 | 9 | Public-URL Receipt Hosting | Phase 2 | [steps/09-public-url-hosting.md](steps/09-public-url-hosting.md) |
 | 10 | SQLite-backed Receipt Store | Phase 2 | [steps/10-sqlite-receipt-store.md](steps/10-sqlite-receipt-store.md) |
+| 11 | Deep Sleep Integrity Walk | Phase 2 | [steps/11-deep-sleep.md](steps/11-deep-sleep.md) |
 
 > **Note:** Phase 0 (the receipt format) is foundational and ships before Phase 1 step 1, so it's labeled "Step 0" in this index. Phase 1 has 8 numbered steps. Phase 2 begins at step 9.
 

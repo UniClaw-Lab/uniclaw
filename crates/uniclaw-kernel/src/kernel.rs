@@ -10,7 +10,7 @@ use uniclaw_receipt::{
     Action, Decision, Digest, MerkleLeaf, ProvenanceEdge, RECEIPT_FORMAT_VERSION, Receipt,
     ReceiptBody, RuleRef, crypto,
 };
-use uniclaw_sleep::LightSleepReport;
+use uniclaw_sleep::{DeepSleepReport, LightSleepReport};
 
 use crate::event::{Approval, KernelEvent, Proposal};
 use crate::leaf::compute_leaf_hash;
@@ -71,6 +71,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             KernelEvent::EvaluateProposal(p) => Ok(self.handle_proposal(*p)),
             KernelEvent::ResolveApproval(a) => self.handle_resolve_approval(*a),
             KernelEvent::RunLightSleep(r) => Ok(self.handle_light_sleep(&r)),
+            KernelEvent::RunDeepSleep(r) => Ok(self.handle_deep_sleep(&r)),
         }
     }
 
@@ -264,6 +265,51 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             receipt,
             lease_after: None,
             kind: OutcomeKind::LightSleepCompleted { failed_cleaners },
+        }
+    }
+
+    fn handle_deep_sleep(&mut self, report: &DeepSleepReport) -> KernelOutcome {
+        let issued_at = self.clock.now_iso8601();
+        let walker_count = report.walker_count();
+        let failed_walkers = report.failed_count();
+        let total_items = report.total_items_walked();
+        let total_bytes = report.total_bytes_walked();
+
+        let action = Action {
+            kind: alloc::string::String::from("$kernel/sleep/deep"),
+            target: format!(
+                "walkers={walker_count} items={total_items} bytes={total_bytes} failed={failed_walkers}",
+            ),
+            input_hash: Digest([0u8; 32]),
+        };
+
+        // One provenance edge per walker. Successful walkers use
+        // `kind = "deep_sleep_pass"` and report counts in `to`; failed
+        // walkers (including those that *detected* tampering) use
+        // `kind = "deep_sleep_failure"` and put the message in `to`.
+        let mut provenance: Vec<ProvenanceEdge> = Vec::with_capacity(walker_count);
+        for pass in &report.passes {
+            let edge = match &pass.outcome {
+                Ok(r) => ProvenanceEdge {
+                    from: format!("walker:{}", pass.name),
+                    to: format!("items={} bytes={}", r.items_walked, r.bytes_walked),
+                    kind: "deep_sleep_pass".into(),
+                },
+                Err(e) => ProvenanceEdge {
+                    from: format!("walker:{}", pass.name),
+                    to: format!("error: {}", e.message),
+                    kind: "deep_sleep_failure".into(),
+                },
+            };
+            provenance.push(edge);
+        }
+
+        let receipt = self.mint(issued_at, action, Decision::Allowed, Vec::new(), provenance);
+
+        KernelOutcome {
+            receipt,
+            lease_after: None,
+            kind: OutcomeKind::DeepSleepCompleted { failed_walkers },
         }
     }
 
@@ -751,6 +797,122 @@ mod tests {
             .handle(KernelEvent::run_light_sleep(LightSleepReport::empty()))
             .unwrap();
 
+        assert_eq!(r2.receipt.body.merkle_leaf.sequence, 1);
+        assert_eq!(
+            r2.receipt.body.merkle_leaf.prev_hash,
+            r1.receipt.body.merkle_leaf.leaf_hash,
+        );
+        assert_eq!(k.state().sequence, 2);
+    }
+
+    // --- Phase 2 step 11: Deep Sleep ---
+
+    use uniclaw_sleep::{DeepSleepReport, WalkError, WalkReport, WalkerPass};
+
+    fn deep_sleep_report(passes: Vec<WalkerPass>) -> DeepSleepReport {
+        DeepSleepReport { passes }
+    }
+
+    #[test]
+    fn empty_deep_sleep_pass_still_mints_a_receipt() {
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
+        let out = k
+            .handle(KernelEvent::run_deep_sleep(DeepSleepReport::empty()))
+            .expect("ok");
+
+        assert_eq!(out.receipt.body.action.kind, "$kernel/sleep/deep");
+        assert_eq!(
+            out.receipt.body.action.target,
+            "walkers=0 items=0 bytes=0 failed=0",
+        );
+        assert_eq!(out.receipt.body.decision, Decision::Allowed);
+        assert!(out.receipt.body.constitution_rules.is_empty());
+        assert!(out.receipt.body.provenance.is_empty());
+        assert_eq!(
+            out.kind,
+            OutcomeKind::DeepSleepCompleted { failed_walkers: 0 },
+        );
+        assert!(out.lease_after.is_none());
+        assert_eq!(out.receipt.body.merkle_leaf.sequence, 0);
+    }
+
+    #[test]
+    fn deep_sleep_summary_aggregates_per_walker_totals() {
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
+        let report = deep_sleep_report(vec![
+            WalkerPass {
+                name: "audit/main".into(),
+                outcome: Ok(WalkReport {
+                    items_walked: 1000,
+                    bytes_walked: 64_000,
+                }),
+            },
+            WalkerPass {
+                name: "provenance/edges".into(),
+                outcome: Ok(WalkReport {
+                    items_walked: 500,
+                    bytes_walked: 8_000,
+                }),
+            },
+        ]);
+
+        let out = k.handle(KernelEvent::run_deep_sleep(report)).unwrap();
+        assert_eq!(
+            out.receipt.body.action.target,
+            "walkers=2 items=1500 bytes=72000 failed=0",
+        );
+        assert_eq!(out.receipt.body.provenance.len(), 2);
+        assert_eq!(out.receipt.body.provenance[0].from, "walker:audit/main");
+        assert_eq!(out.receipt.body.provenance[0].kind, "deep_sleep_pass");
+        assert_eq!(out.receipt.body.provenance[0].to, "items=1000 bytes=64000",);
+    }
+
+    #[test]
+    fn deep_sleep_records_walker_failures_in_provenance_and_summary() {
+        let mut k = Kernel::new(StubSigner, FixedClock, EmptyConstitution);
+        let report = deep_sleep_report(vec![
+            WalkerPass {
+                name: "audit/main".into(),
+                outcome: Ok(WalkReport {
+                    items_walked: 4,
+                    bytes_walked: 0,
+                }),
+            },
+            WalkerPass {
+                name: "provenance/edges".into(),
+                outcome: Err(WalkError::new("dangling edge from receipt:abc")),
+            },
+        ]);
+
+        let out = k.handle(KernelEvent::run_deep_sleep(report)).unwrap();
+        assert_eq!(
+            out.receipt.body.action.target,
+            "walkers=2 items=4 bytes=0 failed=1",
+        );
+        assert_eq!(
+            out.kind,
+            OutcomeKind::DeepSleepCompleted { failed_walkers: 1 },
+        );
+
+        let failure_edge = &out.receipt.body.provenance[1];
+        assert_eq!(failure_edge.kind, "deep_sleep_failure");
+        assert_eq!(failure_edge.from, "walker:provenance/edges");
+        assert_eq!(failure_edge.to, "error: dangling edge from receipt:abc");
+    }
+
+    #[test]
+    fn deep_sleep_advances_chain_state_like_any_other_event() {
+        let mut k = Kernel::new(
+            StubSigner,
+            CountingClock {
+                counter: Cell::new(0),
+            },
+            EmptyConstitution,
+        );
+        let r1 = k.handle(KernelEvent::evaluate(proposal())).unwrap();
+        let r2 = k
+            .handle(KernelEvent::run_deep_sleep(DeepSleepReport::empty()))
+            .unwrap();
         assert_eq!(r2.receipt.body.merkle_leaf.sequence, 1);
         assert_eq!(
             r2.receipt.body.merkle_leaf.prev_hash,

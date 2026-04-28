@@ -15,8 +15,8 @@ use uniclaw_constitution::{
 };
 use uniclaw_kernel::{
     Approval, ApprovalRejection, Cleanable, CleanerPass, CleanupError, CleanupReport, Clock,
-    Kernel, KernelError, KernelEvent, LightSleepReport, OutcomeKind, Proposal, Signer,
-    run_light_sleep,
+    DeepSleepReport, Kernel, KernelError, KernelEvent, LightSleepReport, OutcomeKind, Proposal,
+    ReceiptLogWalker, Signer, Walkable, run_deep_sleep, run_light_sleep,
 };
 use uniclaw_receipt::{
     Action, Decision, Digest, ProvenanceEdge, Receipt, ReceiptBody, RuleRef, crypto,
@@ -781,6 +781,120 @@ fn empty_light_sleep_pass_is_a_meaningful_audit_event() {
     // in this test.
     let _: Option<CleanerPass> = None;
     let _: Option<LightSleepReport> = None;
+}
+
+// --- Phase 2 step 11: Deep Sleep with real Ed25519 + ReceiptLogWalker ---
+
+#[test]
+fn deep_sleep_pass_walks_real_receipt_log_and_mints_signed_receipt() {
+    use uniclaw_store::{InMemoryReceiptLog, ReceiptLog};
+
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(SigningKey::from_bytes(&[7u8; 32])),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    // Build an audit log of 8 receipts (signed by `key`).
+    let issuer = uniclaw_receipt::PublicKey(key.verifying_key().to_bytes());
+    let mut audit = InMemoryReceiptLog::new(issuer);
+    let mut prev = Digest([0u8; 32]);
+    for i in 0..8 {
+        let mut body = ReceiptBody {
+            schema_version: uniclaw_receipt::RECEIPT_FORMAT_VERSION,
+            issued_at: format!("2026-04-28T00:00:{i:02}Z"),
+            action: Action {
+                kind: "http.fetch".into(),
+                target: format!("https://example.com/{i}"),
+                input_hash: Digest([0u8; 32]),
+            },
+            decision: Decision::Allowed,
+            constitution_rules: vec![],
+            provenance: vec![],
+            redactor_stack_hash: None,
+            merkle_leaf: uniclaw_receipt::MerkleLeaf {
+                sequence: i,
+                leaf_hash: Digest([0u8; 32]),
+                prev_hash: prev,
+            },
+        };
+        let canonical = serde_json::to_vec(&body).unwrap();
+        body.merkle_leaf.leaf_hash = Digest(*blake3::hash(&canonical).as_bytes());
+        prev = body.merkle_leaf.leaf_hash;
+        let r = uniclaw_receipt::crypto::sign(body, &key);
+        audit.append(r).expect("append");
+    }
+
+    // Run a Deep Sleep pass with one walker over the audit log.
+    let mut walker = ReceiptLogWalker::new("audit/main", &audit);
+    let report = run_deep_sleep(&mut [&mut walker]);
+    assert_eq!(report.walker_count(), 1);
+    assert_eq!(report.failed_count(), 0);
+    assert_eq!(report.total_items_walked(), 8);
+
+    let out = kernel
+        .handle(KernelEvent::run_deep_sleep(report))
+        .expect("ok");
+
+    // Receipt verifies under the kernel's signing key.
+    crypto::verify(&out.receipt).expect("deep sleep receipt must verify");
+
+    // Action describes the pass at a glance.
+    assert_eq!(out.receipt.body.action.kind, "$kernel/sleep/deep");
+    assert_eq!(
+        out.receipt.body.action.target,
+        "walkers=1 items=8 bytes=0 failed=0",
+    );
+
+    // Provenance: one edge per walker.
+    assert_eq!(out.receipt.body.provenance.len(), 1);
+    let edge = &out.receipt.body.provenance[0];
+    assert_eq!(edge.from, "walker:audit/main");
+    assert_eq!(edge.kind, "deep_sleep_pass");
+    assert_eq!(edge.to, "items=8 bytes=0");
+
+    assert_eq!(
+        out.kind,
+        OutcomeKind::DeepSleepCompleted { failed_walkers: 0 },
+    );
+
+    // Tampering provenance breaks the signature.
+    let mut tampered = out.receipt.clone();
+    tampered.body.provenance[0].to = "items=0 bytes=0".into();
+    assert!(
+        crypto::verify(&tampered).is_err(),
+        "tampered Deep Sleep receipt must not verify",
+    );
+}
+
+#[test]
+fn empty_deep_sleep_pass_is_a_meaningful_audit_event() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let report = run_deep_sleep(&mut []);
+    let out = kernel
+        .handle(KernelEvent::run_deep_sleep(report))
+        .expect("ok");
+
+    crypto::verify(&out.receipt).expect("empty Deep Sleep pass produces a verifiable receipt");
+    assert_eq!(out.receipt.body.action.kind, "$kernel/sleep/deep");
+    assert!(out.receipt.body.provenance.is_empty());
+    assert_eq!(
+        out.kind,
+        OutcomeKind::DeepSleepCompleted { failed_walkers: 0 },
+    );
+
+    let _: Option<DeepSleepReport> = None;
+    // Reference the Walkable + ReceiptLogWalker imports so unused-import
+    // lint stays clean if the test surface changes around them.
+    let _: Option<&dyn Walkable> = None;
+    let _: Option<ReceiptLogWalker<'_, uniclaw_store::InMemoryReceiptLog>> = None;
 }
 
 #[test]

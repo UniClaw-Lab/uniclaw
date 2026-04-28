@@ -45,7 +45,9 @@ pub use outcome::{ApprovalRejection, KernelError, KernelOutcome, OutcomeKind};
 pub use state::KernelState;
 pub use traits::{Clock, Signer};
 // Re-export sleep types so kernel callers don't need a direct dependency
-// on `uniclaw-sleep` to construct `KernelEvent::RunLightSleep`.
+// on `uniclaw-sleep` to construct `KernelEvent::RunLightSleep` /
+// `RunDeepSleep`.
 pub use uniclaw_sleep::{
-    Cleanable, CleanerPass, CleanupError, CleanupReport, LightSleepReport, run_light_sleep,
+    Cleanable, CleanerPass, CleanupError, CleanupReport, DeepSleepReport, LightSleepReport,
+    ReceiptLogWalker, WalkError, WalkReport, Walkable, WalkerPass, run_deep_sleep, run_light_sleep,
 };

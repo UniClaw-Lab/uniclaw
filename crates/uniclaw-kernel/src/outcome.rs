@@ -53,6 +53,13 @@ pub enum OutcomeKind {
     /// but do not turn the outcome into a denial; Light Sleep is
     /// best-effort.
     LightSleepCompleted { failed_cleaners: usize },
+    /// A Deep Sleep integrity walk completed and the kernel minted its
+    /// receipt. `failed_walkers` counts walkers that returned an error
+    /// (including walkers that *detected* tampering — that is the
+    /// expected path, not a kernel error). Failures appear in the
+    /// receipt's provenance edges; the kernel does not act on them,
+    /// leaving response policy to the caller.
+    DeepSleepCompleted { failed_walkers: usize },
 }
 
 /// Reasons the kernel can refuse to act on an event without minting a

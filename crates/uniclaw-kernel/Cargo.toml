@@ -24,6 +24,7 @@ blake3.workspace = true
 
 [dev-dependencies]
 uniclaw-receipt = { workspace = true, features = ["crypto"] }
+uniclaw-store.workspace = true
 ed25519-dalek = { workspace = true }
 
 [lints]

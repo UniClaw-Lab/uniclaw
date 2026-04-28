@@ -13,6 +13,14 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+uniclaw-receipt.workspace = true
+uniclaw-store.workspace = true
+
+[dev-dependencies]
+uniclaw-receipt = { workspace = true, features = ["crypto"] }
+ed25519-dalek = { workspace = true }
+blake3.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
