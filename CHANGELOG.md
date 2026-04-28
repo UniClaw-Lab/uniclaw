@@ -12,6 +12,25 @@ format change history.
 
 ### Added
 
+- **Beginner-friendly documentation set under `docs/`.** First doc-only PR;
+  a standing rule going forward is that every implementation step ships
+  with (or is followed by) a step doc in `docs/steps/`.
+  - `docs/README.md` — index + navigation guidance + style conventions.
+  - `docs/01-what-is-uniclaw.md` — intro for everyone (what Uniclaw is,
+    what it does, who it's for, the eight skills).
+  - `docs/02-uniclaw-vs-openclaw.md` — side-by-side comparison with the
+    most popular agent runtime; "when to pick which" guidance.
+  - `docs/03-roadmap.md` — friendly tour of the eight phases with
+    Mermaid timeline.
+  - `docs/steps/00-foundation-receipts.md` through
+    `docs/steps/08-light-sleep.md` — one page per shipped step,
+    covering: what it is → where it fits → what problem it solved →
+    how it works → what you can do today.
+  - All docs use plain English, define jargon on first use, and embed
+    Mermaid diagrams where they help (GitHub renders them inline).
+
+## [Phase 1 — Shippable Core] complete on `main`
+
 - **`uniclaw-sleep` crate** — Light Sleep cleanup architecture (master
   plan §16.3.1). Workspace member 10. The Spine layer's
   background-task surface; the kernel turns each pass into a signed
