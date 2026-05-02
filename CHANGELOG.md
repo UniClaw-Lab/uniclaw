@@ -12,6 +12,67 @@ format change history.
 
 ### Added
 
+- **HTML verifier UI on `uniclaw-host`** (Phase 2 step 4 / step 12).
+  Closes the verifiability wedge to **non-engineers**: an auditor pastes
+  a receipt JSON into `https://your-host/verify`, clicks Verify, and
+  sees ✓/✗ in milliseconds — entirely client-side, no install, no
+  account, no backend round-trip.
+  - New `GET /verify` route serves a static, self-contained HTML page
+    (~8.5 KB) embedded at compile time via `include_str!`. No external
+    scripts, no external stylesheets, no CDN dependencies.
+  - Verification path mirrors `uniclaw-receipt::crypto::verify`: parse
+    JSON → reconstruct canonical body bytes via
+    `JSON.stringify(receipt.body)` → `crypto.subtle.importKey("raw",
+    issuerBytes, {name: "Ed25519"}, ...)` → `crypto.subtle.verify(
+    "Ed25519", key, sigBytes, bodyBytes)`. Browser Ed25519 support
+    detected on load; warning shown otherwise.
+  - Result panel shows ✓/✗, decision, action kind/target, sequence,
+    issued_at, and the issuer fingerprint (first 4 bytes hex).
+  - **Trust model unchanged**: server does not verify, never claims
+    `verified: true`. The page IS the verifier — auditor can save it
+    locally (Ctrl+S) and run offline forever.
+  - `Cache-Control: no-store` on `/verify` so JS updates propagate;
+    `/receipts/<hash>` keeps `immutable, max-age=31536000` (unchanged).
+  - `GET /` index updated to surface the verifier prominently.
+
+### Performance (bench-results/, gitignored — release, in-process via tower::oneshot)
+
+- `GET /verify` (8576-byte HTML page): **4.98 µs/request**
+- `GET /` (smaller index, comparison): 5.47 µs/request
+
+Handler cost is invisible behind any network RTT. Browser-side Ed25519
+verification of a single receipt is ≤ 1 ms on commodity hardware.
+
+### Notes
+
+- 4 new tests in `uniclaw-host` (verifier page served + content-type +
+  no-store cache + UI strings present including
+  `crypto.subtle.verify("Ed25519"` + index links to `/verify` + CORS
+  preserved). Workspace test count: 184 → 188.
+- **Smoke test** validated the canonical-body reconstruction: a
+  Rust-signed receipt JSON, parsed and re-stringified through the
+  exact JS logic the page uses, verified successfully under Node 22's
+  `crypto.subtle` — same API browsers ship. Confirms the
+  `JSON.parse → JSON.stringify` round-trip preserves the kernel's
+  signed bytes byte-for-byte (relies on ES2015+ insertion-order
+  semantics, which all targeted browsers honor).
+- Adopt-don't-copy: client-side verifier-as-static-page is net-new in
+  this shape. Browser-native `crypto.subtle.verify("Ed25519", ...)`
+  has been available in Chrome 113+, Firefox 130+, Safari 17+, and
+  Node 20+ — no JS crypto library needed. Cited in
+  `crates/uniclaw-host/src/verify.html`.
+- New doc per the standing rule:
+  `docs/steps/12-html-verifier.md`. Roadmap and index updated.
+
+### Deliberately deferred (will land later if needed)
+
+- **Drag-and-drop file upload** — paste-only for v0.
+- **Bulk verification** — one receipt at a time.
+- **Public-key allowlist** — auditor reads the issuer fingerprint and
+  externally checks it matches the expected key.
+- **Content-Security-Policy header** — small follow-up.
+- **TLS termination** — run behind a reverse proxy.
+
 - **Deep Sleep integrity walk** (master plan §16.3.3, ships as Phase 2
   step 3). The second sleep stage. Symmetric to Light Sleep but for
   read-only integrity checks instead of mutating cleanup.

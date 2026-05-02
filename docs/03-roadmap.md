@@ -64,6 +64,7 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 - ✅ **`uniclaw-host` crate** — an HTTP server that serves any receipt at `/receipts/<hash>`. Step 9. See [steps/09-public-url-hosting.md](steps/09-public-url-hosting.md).
 - ✅ **SQLite-backed receipt log** — persistent receipts that survive process restarts. Step 10. See [steps/10-sqlite-receipt-store.md](steps/10-sqlite-receipt-store.md).
 - ✅ **Deep Sleep integrity walk** — scheduled `verify_chain()` pass that mints a `$kernel/sleep/deep` audit receipt. Step 11. See [steps/11-deep-sleep.md](steps/11-deep-sleep.md).
+- ✅ **HTML verifier UI** — `/verify` page with browser-native Ed25519 verification via `crypto.subtle`. Closes the wedge to non-engineer auditors. Step 12. See [steps/12-html-verifier.md](steps/12-html-verifier.md).
 - 🔜 A real, running instance at `https://uniclaw.dev/receipts/...`.
 - 🔜 REM Sleep (daily reflection) — blocked on Phase 4 provenance graph + memory subsystems.
 
@@ -154,7 +155,7 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 ```
 Phase 0 ✅ done
 Phase 1 ✅ done
-Phase 2 🚧 in progress (steps 9 + 10 + 11 landed)  ← you are here
+Phase 2 🚧 in progress (steps 9 + 10 + 11 + 12 landed)  ← you are here
 Phase 3 ⬜ planned
 Phase 4 ⬜ planned
 Phase 5 ⬜ planned

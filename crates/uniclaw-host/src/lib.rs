@@ -13,7 +13,10 @@
 //! |--------|----------------------|-----------------------------------------------------------|
 //! | GET    | `/receipts/<hex>`    | Canonical receipt JSON, or 404 with a small JSON error.   |
 //! | GET    | `/healthz`           | `{"ok": true, "count": <log_len>}`                         |
-//! | GET    | `/`                  | Minimal HTML index pointing at the docs.                  |
+//! | GET    | `/`                  | Minimal HTML index pointing at the docs and `/verify`.    |
+//! | GET    | `/verify`            | Static HTML page that verifies a pasted receipt cold,     |
+//! |        |                      | client-side, using `crypto.subtle` Ed25519. No server     |
+//! |        |                      | round-trip — the page itself is the verifier.             |
 //!
 //! Receipts are content-addressed and immutable, so successful fetches
 //! ship `Cache-Control: public, max-age=31536000, immutable` and a
@@ -94,10 +97,32 @@ where
     let state = Arc::new(AppState::new(log));
     Router::new()
         .route("/", get(get_index))
+        .route("/verify", get(get_verify_page))
         .route("/healthz", get(get_healthz::<L>))
         .route("/receipts/:hash_hex", get(get_receipt::<L>))
         .with_state(state)
         .layer(CorsLayer::permissive())
+}
+
+/// Static HTML verifier page. Compiled into the binary via `include_str!`
+/// — no filesystem read at runtime, no separate static-files directory
+/// to deploy. The page itself does Ed25519 verification client-side
+/// using `crypto.subtle`; the server never touches the receipt being
+/// verified.
+const VERIFY_PAGE: &str = include_str!("verify.html");
+
+async fn get_verify_page() -> impl IntoResponse {
+    // No-store on the verifier page so updates propagate without
+    // CDN caching surprises. The receipts themselves stay
+    // immutable-cached at `/receipts/<hex>`.
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        VERIFY_PAGE,
+    )
 }
 
 /// Body for the small JSON 404 we return when a hash is unknown.
@@ -131,13 +156,16 @@ async fn get_index() -> impl IntoResponse {
         "<p>This service hosts <strong>signed, content-addressed receipts</strong> ",
         "produced by a Uniclaw kernel. Each receipt is verifiable cold ",
         "(no API call, no account) using the issuer's Ed25519 public key.</p>",
+        "<p>Want to check one right now? ",
+        "<a href=\"/verify\"><strong>Open the in-browser verifier →</strong></a></p>",
         "<h2>Endpoints</h2>",
         "<ul>",
         "<li><code>GET /receipts/&lt;hex&gt;</code> — fetch a receipt by content hash.</li>",
+        "<li><code>GET /verify</code> — paste a receipt, verify it client-side.</li>",
         "<li><code>GET /healthz</code> — JSON liveness probe.</li>",
         "</ul>",
         "<p>See <a href=\"https://github.com/UniClaw-Lab/uniclaw\">the project on GitHub</a> ",
-        "for the receipt format spec and verifier.</p>",
+        "for the receipt format spec and the offline command-line verifier.</p>",
         "</body></html>",
     );
     (
@@ -479,6 +507,127 @@ mod tests {
             .unwrap();
         // Permissive layer echoes the origin or returns "*" depending on
         // tower-http defaults; either is acceptable for our use case.
+        assert!(allow == "*" || allow == "https://auditor.example.com");
+    }
+
+    // --- Phase 2 step 4: HTML verifier page ---
+
+    #[tokio::test]
+    async fn verify_page_is_served_with_html_content_type() {
+        let (app, _) = fixture(0);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/verify")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let ct = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .expect("Content-Type set")
+            .to_str()
+            .unwrap();
+        assert!(
+            ct.starts_with("text/html"),
+            "Content-Type was {ct:?}, expected text/html",
+        );
+
+        let cache = resp
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .expect("Cache-Control set")
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            cache, "no-store",
+            "verifier page must not be cached so updates propagate",
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_page_contains_essential_ui_and_crypto_subtle_call() {
+        let (app, _) = fixture(0);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/verify")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = body_string(resp).await;
+
+        // Title + form elements an auditor-end-user would look for.
+        assert!(body.contains("Uniclaw Receipt Verifier"));
+        assert!(body.contains("<textarea"));
+        assert!(body.contains("Verify"));
+
+        // The whole point: it does Ed25519 in the browser. If a refactor
+        // ever drops the SubtleCrypto call, this test catches it.
+        assert!(body.contains(r#"crypto.subtle.verify("Ed25519""#));
+        assert!(body.contains("crypto.subtle.importKey"));
+        assert!(body.contains(r#"name: "Ed25519""#));
+
+        // Browser-support warning is present (and starts hidden).
+        assert!(body.contains("warn-noed25519"));
+        assert!(body.contains("hidden"));
+
+        // No external resources — the verifier must be entirely
+        // self-contained, otherwise the trust model leaks. Rough check:
+        // no <script src=...>, no <link rel="stylesheet" href=...>.
+        assert!(
+            !body.contains("<script src="),
+            "verifier page must not load external scripts",
+        );
+        assert!(
+            !body.contains("<link rel=\"stylesheet\""),
+            "verifier page must not load external stylesheets",
+        );
+    }
+
+    #[tokio::test]
+    async fn index_page_links_to_verifier() {
+        let (app, _) = fixture(0);
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = body_string(resp).await;
+        // The index must surface the verifier — otherwise users won't
+        // discover it.
+        assert!(
+            body.contains("/verify"),
+            "index page must link to /verify so users find the in-browser verifier",
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_page_has_no_cors_origin_block_for_static_assets() {
+        // Sanity: even though the page is static, the CORS layer should
+        // still apply (an embedding site might want to fetch it).
+        let (app, _) = fixture(0);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/verify")
+                    .header(header::ORIGIN, "https://auditor.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let allow = resp
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .expect("ACAO header set on /verify too")
+            .to_str()
+            .unwrap();
         assert!(allow == "*" || allow == "https://auditor.example.com");
     }
 }

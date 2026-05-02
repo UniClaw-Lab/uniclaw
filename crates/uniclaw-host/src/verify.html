@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Uniclaw Receipt Verifier</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 48em; margin: 3em auto; padding: 0 1em; line-height: 1.55; color: #1f2328;
+  }
+  h1 { margin-bottom: 0.1em; font-size: 1.6em; }
+  .lede { color: #57606a; margin-top: 0.2em; }
+  p { margin: 0.6em 0; }
+  textarea {
+    width: 100%; box-sizing: border-box; min-height: 11em;
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    padding: 0.6em; border: 1px solid #d0d7de; border-radius: 6px; resize: vertical;
+  }
+  button {
+    margin-top: 0.6em; padding: 0.55em 1.2em; font-size: 1em; font-weight: 500;
+    border: 0; border-radius: 6px; background: #1f6feb; color: white; cursor: pointer;
+  }
+  button:hover { background: #1a5fcb; }
+  button:disabled { background: #8c959f; cursor: not-allowed; }
+  #result {
+    margin-top: 1.5em; padding: 1em 1.1em; border-radius: 6px; display: none;
+  }
+  #result.ok { background: #dafbe1; border-left: 4px solid #1a7f37; }
+  #result.bad { background: #ffebe9; border-left: 4px solid #d1242f; }
+  #result h2 { margin: 0 0 0.4em 0; font-size: 1.05em; }
+  #result dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25em 0.9em; margin: 0.5em 0 0 0; font-size: 0.95em; }
+  #result dt { color: #57606a; font-weight: 500; }
+  #result dd { margin: 0; font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
+  .warn {
+    background: #fff8c5; border-left: 4px solid #d4a72c;
+    padding: 0.8em 1em; margin: 1em 0; border-radius: 6px; font-size: 0.95em;
+  }
+  footer {
+    margin-top: 4em; color: #57606a; font-size: 0.9em;
+    border-top: 1px solid #d0d7de; padding-top: 1em;
+  }
+  a { color: #0969da; }
+  code {
+    background: #eaeef2; padding: 0.1em 0.35em; border-radius: 4px;
+    font: 0.9em ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+<h1>Uniclaw Receipt Verifier</h1>
+<p class="lede">Cold-verify a Uniclaw receipt in your browser. Nothing leaves this page.</p>
+
+<p>
+  Paste a receipt JSON below (for example, what you get from
+  <code>GET /receipts/&lt;hash&gt;</code>) and click <strong>Verify</strong>.
+  This page reconstructs the canonical body and runs an Ed25519
+  signature check against the receipt's embedded issuer key —
+  entirely client-side using the browser's native
+  <code>crypto.subtle</code>. There is no server-side verification.
+</p>
+
+<div id="warn-noed25519" class="warn" hidden>
+  ⚠ Your browser does not appear to support Ed25519 in
+  <code>crypto.subtle</code>. Try Chrome 113+, Firefox 130+, or
+  Safari 17+. You can still inspect the receipt fields below — just
+  not verify the signature here. The standalone <code>uniclaw-verify</code>
+  CLI works on every platform.
+</div>
+
+<textarea id="input" spellcheck="false" autocomplete="off"
+  placeholder='{"version":1,"body":{...},"issuer":"...","signature":"..."}'></textarea>
+<button id="go" type="button">Verify</button>
+
+<div id="result" role="status" aria-live="polite"></div>
+
+<footer>
+  See <a href="https://github.com/UniClaw-Lab/uniclaw">the project on GitHub</a>
+  for the receipt format spec (RFC-0001) and the offline command-line
+  verifier (<code>uniclaw-verify</code>).
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // --- helpers ---
+
+  function hexToBytes(hex) {
+    if (typeof hex !== "string") throw new Error("hex must be a string");
+    if (hex.length % 2 !== 0) throw new Error("hex must be even-length");
+    const out = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out.length; i++) {
+      const b = parseInt(hex.substr(i * 2, 2), 16);
+      if (Number.isNaN(b)) throw new Error("invalid hex character at offset " + (i * 2));
+      out[i] = b;
+    }
+    return out;
+  }
+
+  function shortFingerprint(bytes) {
+    return Array.from(bytes.slice(0, 4))
+      .map(b => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  function htmlEscape(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[c]);
+  }
+
+  // --- core verification ---
+
+  async function ed25519Supported() {
+    if (!window.crypto || !window.crypto.subtle) return false;
+    try {
+      // 32 zero bytes is a syntactically-valid Ed25519 public key.
+      // importKey will reject if the algorithm isn't supported.
+      await crypto.subtle.importKey(
+        "raw", new Uint8Array(32),
+        { name: "Ed25519" }, false, ["verify"]
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function verifyReceipt(receipt) {
+    if (!receipt || typeof receipt !== "object") {
+      throw new Error("input is not a JSON object");
+    }
+    if (!receipt.body || typeof receipt.body !== "object") {
+      throw new Error("receipt is missing a body");
+    }
+    if (typeof receipt.issuer !== "string") {
+      throw new Error("issuer must be a hex string");
+    }
+    if (typeof receipt.signature !== "string") {
+      throw new Error("signature must be a hex string");
+    }
+
+    const issuerBytes = hexToBytes(receipt.issuer);
+    if (issuerBytes.length !== 32) {
+      throw new Error("issuer must be 32 bytes (64 hex chars), got " + issuerBytes.length);
+    }
+    const sigBytes = hexToBytes(receipt.signature);
+    if (sigBytes.length !== 64) {
+      throw new Error("signature must be 64 bytes (128 hex chars), got " + sigBytes.length);
+    }
+
+    // Reconstruct the canonical body bytes the kernel signed.
+    //
+    // The kernel's `crypto::sign` does `serde_json::to_vec(&body)`, which
+    // emits keys in struct-declaration order. Since ES2015, JS preserves
+    // insertion order for string-keyed properties in both `JSON.parse`
+    // (parsed-in-source-order) and `JSON.stringify` (serialized-in-property-
+    // order). For a receipt fetched from `/receipts/<hash>`, those bytes
+    // match the kernel's signed bytes exactly. If the user pasted a
+    // pretty-printed copy, this re-stringification produces the same
+    // compact form the kernel signed.
+    const bodyStr = JSON.stringify(receipt.body);
+    const bodyBytes = new TextEncoder().encode(bodyStr);
+
+    const key = await crypto.subtle.importKey(
+      "raw", issuerBytes,
+      { name: "Ed25519" }, false, ["verify"]
+    );
+    const ok = await crypto.subtle.verify("Ed25519", key, sigBytes, bodyBytes);
+    return { ok, issuerBytes };
+  }
+
+  // --- UI ---
+
+  function renderResult(ok, info) {
+    const r = document.getElementById("result");
+    r.className = ok ? "ok" : "bad";
+    r.style.display = "block";
+    const heading = ok ? "✓ Receipt verified" : "✗ Verification failed";
+    let body = "";
+    if (info.body) {
+      const b = info.body;
+      const fp = info.issuerBytes ? shortFingerprint(info.issuerBytes) + "…" : "?";
+      const action = b.action || {};
+      body = "<dl>" +
+        "<dt>Issuer (fp)</dt><dd>" + htmlEscape(fp) + "</dd>" +
+        "<dt>Decision</dt><dd>" + htmlEscape(b.decision || "?") + "</dd>" +
+        "<dt>Action</dt><dd>" +
+          htmlEscape(action.kind || "?") + " → " +
+          htmlEscape(action.target || "?") + "</dd>" +
+        "<dt>Sequence</dt><dd>" +
+          htmlEscape(b.merkle_leaf ? String(b.merkle_leaf.sequence) : "?") + "</dd>" +
+        "<dt>Issued at</dt><dd>" + htmlEscape(b.issued_at || "?") + "</dd>" +
+        "</dl>";
+    }
+    if (info.error) {
+      body += "<p>" + htmlEscape(info.error) + "</p>";
+    }
+    r.innerHTML = "<h2>" + heading + "</h2>" + body;
+  }
+
+  document.getElementById("go").addEventListener("click", async () => {
+    const text = document.getElementById("input").value.trim();
+    if (!text) {
+      renderResult(false, { error: "Paste a receipt first." });
+      return;
+    }
+    let r;
+    try {
+      r = JSON.parse(text);
+    } catch (e) {
+      renderResult(false, { error: "Invalid JSON: " + e.message });
+      return;
+    }
+    try {
+      const { ok, issuerBytes } = await verifyReceipt(r);
+      renderResult(ok, {
+        body: r.body,
+        issuerBytes,
+        error: ok ? null : "Signature did not verify under the embedded issuer key.",
+      });
+    } catch (e) {
+      renderResult(false, { body: r.body, error: e.message });
+    }
+  });
+
+  ed25519Supported().then(supported => {
+    if (!supported) {
+      document.getElementById("warn-noed25519").hidden = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
