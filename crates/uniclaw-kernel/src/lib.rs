@@ -38,10 +38,12 @@ mod outcome;
 mod state;
 mod traits;
 
-pub use event::{Approval, KernelEvent, Proposal};
+pub use event::{Approval, KernelEvent, Proposal, ToolExecution};
 pub use kernel::Kernel;
 pub use leaf::compute_leaf_hash;
-pub use outcome::{ApprovalRejection, KernelError, KernelOutcome, OutcomeKind};
+pub use outcome::{
+    ApprovalRejection, KernelError, KernelOutcome, OutcomeKind, ToolExecutionRejection,
+};
 pub use state::KernelState;
 pub use traits::{Clock, Signer};
 // Re-export sleep types so kernel callers don't need a direct dependency
@@ -50,4 +52,10 @@ pub use traits::{Clock, Signer};
 pub use uniclaw_sleep::{
     Cleanable, CleanerPass, CleanupError, CleanupReport, DeepSleepReport, LightSleepReport,
     ReceiptLogWalker, WalkError, WalkReport, Walkable, WalkerPass, run_deep_sleep, run_light_sleep,
+};
+// Re-export tool types so kernel callers don't need a direct dependency
+// on `uniclaw-tools` to construct `KernelEvent::RecordToolExecution`.
+pub use uniclaw_tools::{
+    ApprovalPolicy, Capability, GlobPattern, NoopTool, Tool, ToolCall, ToolError, ToolHost,
+    ToolManifest, ToolOutput,
 };

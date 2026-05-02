@@ -12,9 +12,11 @@ use uniclaw_receipt::{
 };
 use uniclaw_sleep::{DeepSleepReport, LightSleepReport};
 
-use crate::event::{Approval, KernelEvent, Proposal};
+use crate::event::{Approval, KernelEvent, Proposal, ToolExecution};
 use crate::leaf::compute_leaf_hash;
-use crate::outcome::{ApprovalRejection, KernelError, KernelOutcome, OutcomeKind};
+use crate::outcome::{
+    ApprovalRejection, KernelError, KernelOutcome, OutcomeKind, ToolExecutionRejection,
+};
 use crate::state::KernelState;
 use crate::traits::{Clock, Signer};
 
@@ -72,6 +74,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             KernelEvent::ResolveApproval(a) => self.handle_resolve_approval(*a),
             KernelEvent::RunLightSleep(r) => Ok(self.handle_light_sleep(&r)),
             KernelEvent::RunDeepSleep(r) => Ok(self.handle_deep_sleep(&r)),
+            KernelEvent::RecordToolExecution(e) => self.handle_record_tool_execution(&e),
         }
     }
 
@@ -311,6 +314,126 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             lease_after: None,
             kind: OutcomeKind::DeepSleepCompleted { failed_walkers },
         }
+    }
+
+    fn handle_record_tool_execution(
+        &mut self,
+        e: &ToolExecution,
+    ) -> Result<KernelOutcome, KernelError> {
+        // --- Authenticity gate (mirrors handle_resolve_approval's gate
+        //     exactly; same trust principle: verify a prior receipt is
+        //     ours and untampered before anchoring a follow-on entry) ---
+
+        // 1. allowed_receipt's signature verifies under its embedded issuer.
+        if crypto::verify(&e.allowed_receipt).is_err() {
+            return Err(KernelError::RecordToolExecutionRejected(
+                ToolExecutionRejection::AllowedSignatureInvalid,
+            ));
+        }
+        // 2. Issuer must be us — a receipt signed by another kernel
+        //    cannot anchor an execution under this kernel's chain.
+        if e.allowed_receipt.issuer != self.signer.public_key() {
+            return Err(KernelError::RecordToolExecutionRejected(
+                ToolExecutionRejection::AllowedIssuerMismatch,
+            ));
+        }
+        // 3. The prior receipt must actually be Allowed. Pending,
+        //    Approved, or Denied receipts don't get follow-on
+        //    execution records.
+        if e.allowed_receipt.body.decision != Decision::Allowed {
+            return Err(KernelError::RecordToolExecutionRejected(
+                ToolExecutionRejection::NotAnAllowedReceipt,
+            ));
+        }
+        // 4. The action.kind must look like a tool action. We don't
+        //    record "tool executions" for http.fetch or shell.exec
+        //    proposals — those go through their own paths.
+        if !e.allowed_receipt.body.action.kind.starts_with("tool.") {
+            return Err(KernelError::RecordToolExecutionRejected(
+                ToolExecutionRejection::NotAToolAction,
+            ));
+        }
+        // 5. The original_proposal's action must match the prior
+        //    receipt's action. Defends against an attacker substituting
+        //    a different proposal while keeping a valid receipt.
+        if e.original_proposal.action != e.allowed_receipt.body.action {
+            return Err(KernelError::RecordToolExecutionRejected(
+                ToolExecutionRejection::ActionMismatch,
+            ));
+        }
+
+        // --- Mint the execution receipt ---
+
+        let issued_at = self.clock.now_iso8601();
+        let allowed_id = e.allowed_receipt.content_id();
+        let allowed_id_hex = hex32(&allowed_id.0);
+        let tool_action_kind = &e.allowed_receipt.body.action.kind;
+        let tool_name = tool_action_kind
+            .strip_prefix("tool.")
+            .unwrap_or(tool_action_kind);
+
+        // Provenance edges:
+        // - Always one edge linking back to the Allowed proposal receipt.
+        // - On success: one edge each for the tool input hash and the
+        //   tool output hash (so audit readers can query either).
+        // - On failure: one edge with the error variant + message.
+        let mut provenance: Vec<ProvenanceEdge> = Vec::with_capacity(3);
+        provenance.push(ProvenanceEdge {
+            from: format!("receipt:{allowed_id_hex}"),
+            to: format!("tool:{tool_name}"),
+            kind: "tool_execution".into(),
+        });
+
+        let (kind, action_target) = match &e.result {
+            Ok(output) => {
+                let in_hex = hex32(&e.allowed_receipt.body.action.input_hash.0);
+                let out_hex = hex32(&output.output_hash.0);
+                provenance.push(ProvenanceEdge {
+                    from: format!("receipt:{allowed_id_hex}"),
+                    to: format!("input:{in_hex}"),
+                    kind: "tool_input".into(),
+                });
+                provenance.push(ProvenanceEdge {
+                    from: format!("receipt:{allowed_id_hex}"),
+                    to: format!("output:{out_hex}"),
+                    kind: "tool_output".into(),
+                });
+                (
+                    OutcomeKind::ToolExecutedAllowed {
+                        input_hash: e.allowed_receipt.body.action.input_hash,
+                        output_hash: output.output_hash,
+                    },
+                    format!("tool={tool_name} status=ok"),
+                )
+            }
+            Err(err) => {
+                provenance.push(ProvenanceEdge {
+                    from: format!("receipt:{allowed_id_hex}"),
+                    to: format!("error[{}]: {}", err.variant_name(), err.message()),
+                    kind: "tool_execution_failure".into(),
+                });
+                (
+                    OutcomeKind::ToolExecutedFailed {
+                        input_hash: e.allowed_receipt.body.action.input_hash,
+                    },
+                    format!("tool={tool_name} status=failed kind={}", err.variant_name()),
+                )
+            }
+        };
+
+        let action = Action {
+            kind: alloc::string::String::from("$kernel/tool/executed"),
+            target: action_target,
+            input_hash: Digest([0u8; 32]),
+        };
+
+        let receipt = self.mint(issued_at, action, Decision::Allowed, Vec::new(), provenance);
+
+        Ok(KernelOutcome {
+            receipt,
+            lease_after: None,
+            kind,
+        })
     }
 
     fn mint(

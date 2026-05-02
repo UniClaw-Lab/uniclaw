@@ -13,6 +13,7 @@ members = [
     "crates/uniclaw-sleep",
     "crates/uniclaw-host",
     "crates/uniclaw-store-sqlite",
+    "crates/uniclaw-tools",
 ]
 
 [workspace.package]
@@ -61,6 +62,7 @@ uniclaw-store = { path = "crates/uniclaw-store", version = "0.0.1" }
 uniclaw-sleep = { path = "crates/uniclaw-sleep", version = "0.0.1" }
 uniclaw-host = { path = "crates/uniclaw-host", version = "0.0.1" }
 uniclaw-store-sqlite = { path = "crates/uniclaw-store-sqlite", version = "0.0.1" }
+uniclaw-tools = { path = "crates/uniclaw-tools", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]

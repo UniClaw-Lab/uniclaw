@@ -70,17 +70,18 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 
 **Why it matters:** **this is the wedge made tangible.** Every prior step is infrastructure that you have to read source code to appreciate. Phase 2 is when an auditor on the other side of the world can `curl` a URL and verify a receipt.
 
-## Phase 3 — Tools and Secrets
+## Phase 3 — Tools and Secrets 🚧 in progress
 
 **Goal:** let the agent actually do things, safely.
 
-**What ships:**
+After studying how the four reference Rust/TypeScript claws (IronClaw, OpenFang, ZeroClaw, OpenClaw) shape their tool-execution architecture, Phase 3 is broken into six focused steps. Each is small enough to ship, review, and merge cleanly:
 
-- WASM tool host — run untrusted tools inside a sandbox.
-- Container fallback for tools that need a real OS.
-- "WASM in container" defense-in-depth for the riskiest tools.
-- Secret broker — scoped secrets injected at the host boundary, never in prompts.
-- Response-side leak scanner — looks for secret patterns in the model's output and redacts them before they leave the kernel.
+- ✅ **Step 13 — Tool Execution Foundation** (this PR). New `uniclaw-tools` crate: `Tool` trait + `Capability` enum (7 variants, glob-aware) + `ApprovalPolicy` + `ToolHost` registry + `NoopTool` builtin. Kernel: `KernelEvent::RecordToolExecution` mirrors the Approval flow — caller orchestrates external execution, kernel anchors the result with input/output hashes in provenance. **No WASM runtime yet** — this is the trait foundation. See [steps/13-tool-foundation.md](steps/13-tool-foundation.md).
+- 🔜 **Step 14 — WASM Tool Runtime.** New `uniclaw-tools-wasm` crate using `wasmtime` + WIT Component Model (adopted from IronClaw). First real `Tool` impl: a `WasmTool` adapter that loads a WIT-defined component, applies fuel + memory + timeout limits, and surfaces the result as a regular `ToolOutput`.
+- 🔜 **Step 15 — Capability Enforcement at Host Layer.** HTTP allowlist + SSRF defense (no private IPs) for any tool that does network I/O. Adopted from IronClaw's WASM wrapper. Plumbs declared capabilities through to runtime checks.
+- 🔜 **Step 16 — Secret Broker.** Credential injection at execution time (URLs, headers), with **fail-closed on missing required credentials** (adopted from IronClaw — a tool that declared a credential and didn't get one is refused, not silently run). Tools never see secrets in their input.
+- 🔜 **Step 17 — Container Fallback.** Optional second sandbox tier for tools that can't be WASM-compiled (Python with native deps, browser automation, etc.). Adopted from OpenClaw's tiered Dockerfile pattern. Kept minimal: WASM is the default, container is the escape hatch.
+- 🔜 **Step 18 — Output Sanitization / Redaction Proofs.** Response-side leak scanner that looks for secret patterns in tool output and redacts them, with each redaction emitting its own proof receipt. Closes the secret-leak attack surface.
 
 **Why it matters:** this is where Uniclaw can finally call HTTP, run code, edit files — but with capability budgets enforced *and* with secrets that the model never sees in plaintext.
 
@@ -155,7 +156,8 @@ After Phase 1: the trusted core is **internally** complete. You can wire it up a
 ```
 Phase 0 ✅ done
 Phase 1 ✅ done
-Phase 2 🚧 in progress (steps 9 + 10 + 11 + 12 landed)  ← you are here
+Phase 2 ✅ wedge-complete (steps 9 + 10 + 11 + 12 landed; deployment is ops, not code)
+Phase 3 🚧 in progress (step 13 just landed)              ← you are here
 Phase 3 ⬜ planned
 Phase 4 ⬜ planned
 Phase 5 ⬜ planned

@@ -6,6 +6,7 @@ use uniclaw_approval::ApprovalDecision;
 use uniclaw_budget::{CapabilityLease, ResourceUse};
 use uniclaw_receipt::{Action, Decision, ProvenanceEdge, Receipt, RuleRef};
 use uniclaw_sleep::{DeepSleepReport, LightSleepReport};
+use uniclaw_tools::{ToolError, ToolOutput};
 
 /// A proposal awaiting kernel evaluation.
 ///
@@ -76,6 +77,36 @@ impl Proposal {
     }
 }
 
+/// External tool execution result, submitted back to the kernel for
+/// audit.
+///
+/// **Lifecycle.** A caller wanting to invoke a tool first submits a
+/// `Proposal` whose `action.kind` starts with `"tool."` — the kernel
+/// runs Constitution + Budget gates and (if not denied) mints an
+/// `Allowed` receipt. The caller then runs the tool externally
+/// (typically via [`uniclaw_tools::ToolHost`]), takes the
+/// `Result<ToolOutput, ToolError>` back, and submits this struct to
+/// the kernel as `KernelEvent::RecordToolExecution`. The kernel
+/// runs an authenticity gate against the prior `Allowed` receipt and
+/// mints a follow-on receipt with `action.kind = "$kernel/tool/executed"`.
+///
+/// Same shape as the [`Approval`] flow: the kernel is stateless and
+/// synchronous, all external orchestration lives in the caller, the
+/// kernel just verifies and anchors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolExecution {
+    /// The previously-`Allowed` proposal receipt that authorized this
+    /// tool call. Must be signed by **this** kernel.
+    pub allowed_receipt: Receipt,
+    /// The original proposal that produced `allowed_receipt`. Its
+    /// `action` must match the receipt's recorded action.
+    pub original_proposal: Proposal,
+    /// What the tool returned (or why it failed). Output bytes are
+    /// **not** carried into the kernel — only the precomputed
+    /// `output_hash` from the `ToolOutput` makes it into the receipt.
+    pub result: Result<ToolOutput, ToolError>,
+}
+
 /// Operator's response to a previously-emitted `Pending` receipt.
 ///
 /// The kernel does not store pending state. The caller is responsible for
@@ -120,6 +151,12 @@ pub enum KernelEvent {
     /// `uniclaw-sleep::run_deep_sleep`; the kernel only signs the audit
     /// receipt that proves the walk ran and what it found.
     RunDeepSleep(alloc::boxed::Box<DeepSleepReport>),
+    /// Record an external tool execution against a previously-`Allowed`
+    /// proposal receipt. Mints a `$kernel/tool/executed` receipt with
+    /// the tool's input + output hashes in provenance. The actual
+    /// tool runs **outside** the kernel; this event just anchors the
+    /// result in the audit chain. See [`ToolExecution`].
+    RecordToolExecution(alloc::boxed::Box<ToolExecution>),
 }
 
 impl KernelEvent {
@@ -151,5 +188,13 @@ impl KernelEvent {
     #[must_use]
     pub fn run_deep_sleep(report: DeepSleepReport) -> Self {
         Self::RunDeepSleep(alloc::boxed::Box::new(report))
+    }
+
+    /// Convenience constructor:
+    /// `KernelEvent::record_tool_execution(e)` instead of
+    /// `KernelEvent::RecordToolExecution(Box::new(e))`.
+    #[must_use]
+    pub fn record_tool_execution(execution: ToolExecution) -> Self {
+        Self::RecordToolExecution(alloc::boxed::Box::new(execution))
     }
 }

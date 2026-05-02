@@ -1,7 +1,7 @@
 //! Kernel outcome — what flows out of `Kernel::handle()`.
 
 use uniclaw_budget::{BudgetError, CapabilityLease};
-use uniclaw_receipt::Receipt;
+use uniclaw_receipt::{Digest, Receipt};
 
 /// Result of a kernel event that produced a receipt.
 #[derive(Debug, Clone)]
@@ -60,6 +60,20 @@ pub enum OutcomeKind {
     /// receipt's provenance edges; the kernel does not act on them,
     /// leaving response policy to the caller.
     DeepSleepCompleted { failed_walkers: usize },
+    /// A tool executed successfully and the kernel minted the
+    /// `$kernel/tool/executed` receipt that records its input + output
+    /// hashes. The full output bytes never enter the kernel — only the
+    /// `output_hash` makes it into the audit chain.
+    ToolExecutedAllowed {
+        input_hash: Digest,
+        output_hash: Digest,
+    },
+    /// A tool ran but reported failure. The kernel minted a
+    /// `$kernel/tool/executed` receipt with the error in the
+    /// provenance edge (so audit readers see what went wrong) but
+    /// the full message stays out of the `OutcomeKind` so this enum
+    /// can remain `Copy`.
+    ToolExecutedFailed { input_hash: Digest },
 }
 
 /// Reasons the kernel can refuse to act on an event without minting a
@@ -76,6 +90,9 @@ pub enum KernelError {
     /// pass authenticity checks. See `ApprovalRejection` for which check
     /// failed.
     ResolveApprovalRejected(ApprovalRejection),
+    /// `RecordToolExecution` was submitted but failed the authenticity
+    /// gate. See [`ToolExecutionRejection`] for which check failed.
+    RecordToolExecutionRejected(ToolExecutionRejection),
 }
 
 impl core::fmt::Display for KernelError {
@@ -83,6 +100,9 @@ impl core::fmt::Display for KernelError {
         match self {
             Self::ResolveApprovalRejected(r) => {
                 write!(f, "resolve-approval rejected: {r}")
+            }
+            Self::RecordToolExecutionRejected(r) => {
+                write!(f, "record-tool-execution rejected: {r}")
             }
         }
     }
@@ -111,6 +131,46 @@ impl core::fmt::Display for ApprovalRejection {
             Self::NotAPendingReceipt => "receipt body decision is not Pending",
             Self::ActionMismatch => {
                 "original proposal action does not match pending receipt action"
+            }
+        })
+    }
+}
+
+/// Why a `RecordToolExecution` event was refused without producing a
+/// receipt. Mirrors [`ApprovalRejection`]'s shape — the same
+/// authenticity-gate pattern, just for tool executions instead of
+/// approval responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolExecutionRejection {
+    /// `allowed_receipt`'s Ed25519 signature did not verify.
+    AllowedSignatureInvalid,
+    /// `allowed_receipt` was signed by a different kernel — not us.
+    AllowedIssuerMismatch,
+    /// `allowed_receipt`'s body decision is not `Allowed` — we don't
+    /// record tool executions for proposals that were `Denied`,
+    /// `Pending`, or anything else. The execution lifecycle requires
+    /// a clean approve-then-execute pair.
+    NotAnAllowedReceipt,
+    /// `allowed_receipt.body.action.kind` doesn't start with `"tool."`.
+    /// Defends against the audit chain accumulating "tool execution"
+    /// records for actions that weren't tool calls in the first place.
+    NotAToolAction,
+    /// `original_proposal.action` does not match
+    /// `allowed_receipt.body.action`. Defends against an attacker
+    /// substituting a different proposal while keeping a valid prior
+    /// receipt.
+    ActionMismatch,
+}
+
+impl core::fmt::Display for ToolExecutionRejection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AllowedSignatureInvalid => "allowed receipt signature did not verify",
+            Self::AllowedIssuerMismatch => "allowed receipt was signed by a different issuer",
+            Self::NotAnAllowedReceipt => "receipt body decision is not Allowed",
+            Self::NotAToolAction => "action.kind does not start with \"tool.\"",
+            Self::ActionMismatch => {
+                "original proposal action does not match allowed receipt action"
             }
         })
     }

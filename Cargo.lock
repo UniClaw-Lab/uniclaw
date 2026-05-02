@@ -1106,6 +1106,7 @@ dependencies = [
  "uniclaw-receipt",
  "uniclaw-sleep",
  "uniclaw-store",
+ "uniclaw-tools",
 ]
 
 [[package]]
@@ -1162,6 +1163,14 @@ dependencies = [
  "tempfile",
  "uniclaw-receipt",
  "uniclaw-store",
+]
+
+[[package]]
+name = "uniclaw-tools"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "uniclaw-receipt",
 ]
 
 [[package]]

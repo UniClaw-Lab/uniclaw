@@ -14,9 +14,11 @@ use uniclaw_constitution::{
     EmptyConstitution, InMemoryConstitution, MatchClause, Rule, RuleVerdict,
 };
 use uniclaw_kernel::{
-    Approval, ApprovalRejection, Cleanable, CleanerPass, CleanupError, CleanupReport, Clock,
-    DeepSleepReport, Kernel, KernelError, KernelEvent, LightSleepReport, OutcomeKind, Proposal,
-    ReceiptLogWalker, Signer, Walkable, run_deep_sleep, run_light_sleep,
+    Approval, ApprovalPolicy, ApprovalRejection, Capability, Cleanable, CleanerPass, CleanupError,
+    CleanupReport, Clock, DeepSleepReport, GlobPattern, Kernel, KernelError, KernelEvent,
+    LightSleepReport, NoopTool, OutcomeKind, Proposal, ReceiptLogWalker, Signer, Tool, ToolCall,
+    ToolError, ToolExecution, ToolExecutionRejection, ToolHost, ToolManifest, ToolOutput, Walkable,
+    run_deep_sleep, run_light_sleep,
 };
 use uniclaw_receipt::{
     Action, Decision, Digest, ProvenanceEdge, Receipt, ReceiptBody, RuleRef, crypto,
@@ -925,3 +927,374 @@ fn approval_flow_rejects_when_receipt_isnt_pending() {
         KernelError::ResolveApprovalRejected(ApprovalRejection::NotAPendingReceipt),
     );
 }
+
+// =====================================================================
+// Phase 3 step 1: tool execution receipts
+// =====================================================================
+
+/// Build a `Proposal` for a tool call. `action.kind = "tool.<name>"`,
+/// `input_hash = blake3(input)`. The kernel approves it under
+/// `EmptyConstitution` so the resulting receipt is `Allowed` and ready
+/// to feed back into `RecordToolExecution`.
+fn tool_proposal(tool_name: &str, target: &str, input: &[u8]) -> Proposal {
+    Proposal::unbounded(
+        Action {
+            kind: format!("tool.{tool_name}"),
+            target: target.into(),
+            input_hash: Digest(*blake3::hash(input).as_bytes()),
+        },
+        Decision::Allowed,
+        vec![],
+        vec![],
+    )
+}
+
+/// One-shot helper: submit a tool proposal, get back the Allowed
+/// receipt + the proposal (cloned), so a downstream `ToolExecution`
+/// can consume both.
+fn approved_tool_call(
+    kernel: &mut Kernel<Ed25519Signer, CountingClock, EmptyConstitution>,
+    tool_name: &str,
+    target: &str,
+    input: &[u8],
+) -> (Receipt, Proposal) {
+    let prop = tool_proposal(tool_name, target, input);
+    let outcome = kernel
+        .handle(KernelEvent::evaluate(prop.clone()))
+        .expect("ok");
+    assert_eq!(outcome.receipt.body.decision, Decision::Allowed);
+    (outcome.receipt, prop)
+}
+
+#[test]
+fn tool_execution_success_flow_round_trips_via_noop_tool() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    // 1. Approve a tool call. Kernel mints an Allowed receipt.
+    let input = b"hello tools";
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "echo", input);
+
+    // 2. Run the tool externally (NoopTool returns input verbatim).
+    let host = {
+        let mut h = ToolHost::new();
+        h.register(Box::new(NoopTool::new()));
+        h
+    };
+    let call = ToolCall {
+        tool_name: "noop".into(),
+        target: "echo".into(),
+        input: input.to_vec(),
+        input_hash: allowed.body.action.input_hash,
+    };
+    let output = host.call(&call).expect("noop ok");
+    assert_eq!(output.bytes, input.to_vec());
+
+    // 3. Anchor the result back into the audit chain.
+    let exec_outcome = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed.clone(),
+            original_proposal: prop,
+            result: Ok(output.clone()),
+        }))
+        .expect("kernel records execution");
+
+    // Receipt verifies under the kernel's signing key.
+    crypto::verify(&exec_outcome.receipt).expect("execution receipt signed");
+
+    // It chains to the prior receipt.
+    assert_eq!(
+        exec_outcome.receipt.body.merkle_leaf.prev_hash,
+        allowed.body.merkle_leaf.leaf_hash,
+    );
+
+    // Action describes the execution at a glance.
+    assert_eq!(
+        exec_outcome.receipt.body.action.kind,
+        "$kernel/tool/executed"
+    );
+    assert!(
+        exec_outcome
+            .receipt
+            .body
+            .action
+            .target
+            .contains("tool=noop"),
+    );
+    assert!(
+        exec_outcome
+            .receipt
+            .body
+            .action
+            .target
+            .contains("status=ok")
+    );
+
+    // Three provenance edges: link to allowed receipt, input hash, output hash.
+    assert_eq!(exec_outcome.receipt.body.provenance.len(), 3);
+    let kinds: Vec<&str> = exec_outcome
+        .receipt
+        .body
+        .provenance
+        .iter()
+        .map(|e| e.kind.as_str())
+        .collect();
+    assert!(kinds.contains(&"tool_execution"));
+    assert!(kinds.contains(&"tool_input"));
+    assert!(kinds.contains(&"tool_output"));
+
+    // Outcome kind carries the precomputed hashes.
+    match exec_outcome.kind {
+        OutcomeKind::ToolExecutedAllowed {
+            input_hash,
+            output_hash,
+        } => {
+            assert_eq!(input_hash, allowed.body.action.input_hash);
+            assert_eq!(output_hash, output.output_hash);
+        }
+        other => panic!("expected ToolExecutedAllowed, got {other:?}"),
+    }
+
+    // Tampering provenance breaks the signature.
+    let mut tampered = exec_outcome.receipt.clone();
+    tampered.body.provenance[0].to = "tool:evil".into();
+    assert!(
+        crypto::verify(&tampered).is_err(),
+        "tampered tool-execution receipt must not verify",
+    );
+}
+
+#[test]
+fn tool_execution_failure_path_records_error_in_provenance_not_decision() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "test", b"x");
+
+    let exec = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed,
+            original_proposal: prop,
+            result: Err(ToolError::Failed("disk full".into())),
+        }))
+        .expect("ok");
+
+    // Decision stays Allowed — the *recording* succeeded; the *tool*
+    // failed, which is conveyed via the provenance edge + OutcomeKind.
+    assert_eq!(exec.receipt.body.decision, Decision::Allowed);
+    assert!(exec.receipt.body.action.target.contains("status=failed"),);
+    assert!(exec.receipt.body.action.target.contains("kind=failed"));
+
+    let failure_edge = exec
+        .receipt
+        .body
+        .provenance
+        .iter()
+        .find(|e| e.kind == "tool_execution_failure")
+        .expect("failure edge present");
+    assert!(failure_edge.to.contains("disk full"));
+    assert!(failure_edge.to.contains("[failed]"));
+
+    match exec.kind {
+        OutcomeKind::ToolExecutedFailed { .. } => {}
+        other => panic!("expected ToolExecutedFailed, got {other:?}"),
+    }
+
+    crypto::verify(&exec.receipt).expect("failure receipt verifies");
+}
+
+#[test]
+fn tool_execution_rejects_forged_allowed_receipt() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "x", b"x");
+
+    // Tamper with the action target after signing.
+    let mut forged = allowed;
+    forged.body.action.target = "evil".into();
+
+    let err = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: forged,
+            original_proposal: prop,
+            result: Ok(ToolOutput {
+                bytes: vec![],
+                output_hash: Digest([0u8; 32]),
+            }),
+        }))
+        .expect_err("forged receipt rejected");
+    assert_eq!(
+        err,
+        KernelError::RecordToolExecutionRejected(ToolExecutionRejection::AllowedSignatureInvalid),
+    );
+
+    // Kernel state did NOT advance — sequence stays at 1 (after the
+    // initial Allowed mint), not 2.
+    assert_eq!(kernel.state().sequence, 1);
+}
+
+#[test]
+fn tool_execution_rejects_receipt_signed_by_different_kernel() {
+    let our_key = SigningKey::from_bytes(&[7u8; 32]);
+    let other_key = SigningKey::from_bytes(&[9u8; 32]);
+
+    let mut other_kernel = Kernel::new(
+        Ed25519Signer(other_key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+    let (foreign_allowed, prop) = approved_tool_call(&mut other_kernel, "noop", "x", b"x");
+
+    let mut our_kernel = Kernel::new(
+        Ed25519Signer(our_key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+    let err = our_kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: foreign_allowed,
+            original_proposal: prop,
+            result: Ok(ToolOutput {
+                bytes: vec![],
+                output_hash: Digest([0u8; 32]),
+            }),
+        }))
+        .expect_err("foreign-kernel receipt rejected");
+    assert_eq!(
+        err,
+        KernelError::RecordToolExecutionRejected(ToolExecutionRejection::AllowedIssuerMismatch),
+    );
+}
+
+#[test]
+fn tool_execution_rejects_receipt_whose_decision_isnt_allowed() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    // Submit a Denied proposal — its receipt's decision is Denied.
+    let mut prop = tool_proposal("noop", "x", b"x");
+    prop.decision = Decision::Denied;
+    let denied_receipt = kernel
+        .handle(KernelEvent::evaluate(prop.clone()))
+        .expect("ok")
+        .receipt;
+    assert_eq!(denied_receipt.body.decision, Decision::Denied);
+
+    let err = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: denied_receipt,
+            original_proposal: prop,
+            result: Ok(ToolOutput {
+                bytes: vec![],
+                output_hash: Digest([0u8; 32]),
+            }),
+        }))
+        .expect_err("not-Allowed receipt rejected");
+    assert_eq!(
+        err,
+        KernelError::RecordToolExecutionRejected(ToolExecutionRejection::NotAnAllowedReceipt),
+    );
+}
+
+#[test]
+fn tool_execution_rejects_receipt_whose_action_isnt_a_tool_call() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    // An ordinary http.fetch — not a tool action.
+    let prop = make_proposal(1);
+    let receipt = kernel
+        .handle(KernelEvent::evaluate(prop.clone()))
+        .expect("ok")
+        .receipt;
+    assert!(!receipt.body.action.kind.starts_with("tool."));
+
+    let err = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: receipt,
+            original_proposal: prop,
+            result: Ok(ToolOutput {
+                bytes: vec![],
+                output_hash: Digest([0u8; 32]),
+            }),
+        }))
+        .expect_err("non-tool action rejected");
+    assert_eq!(
+        err,
+        KernelError::RecordToolExecutionRejected(ToolExecutionRejection::NotAToolAction),
+    );
+}
+
+#[test]
+fn tool_execution_rejects_when_proposal_action_doesnt_match_receipt() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let (allowed, _) = approved_tool_call(&mut kernel, "noop", "real-target", b"x");
+
+    let mut substituted = tool_proposal("noop", "real-target", b"x");
+    substituted.action.target = "different-target".into();
+
+    let err = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed,
+            original_proposal: substituted,
+            result: Ok(ToolOutput {
+                bytes: vec![],
+                output_hash: Digest([0u8; 32]),
+            }),
+        }))
+        .expect_err("action substitution rejected");
+    assert_eq!(
+        err,
+        KernelError::RecordToolExecutionRejected(ToolExecutionRejection::ActionMismatch),
+    );
+}
+
+/// Static reference to the imports we use only in trait-bound tests
+/// (so unused-import warnings don't fire in this file).
+#[allow(dead_code)]
+fn _types_referenced_for_lint() -> (ApprovalPolicy, Capability, GlobPattern, ToolManifest) {
+    (
+        ApprovalPolicy::Never,
+        Capability::NetConnect(GlobPattern::new("*")),
+        GlobPattern::new("*"),
+        ToolManifest {
+            name: "x".into(),
+            description: "x".into(),
+            action_kind: "tool.x".into(),
+            declared_capabilities: vec![],
+            default_approval: ApprovalPolicy::Never,
+        },
+    )
+}
+
+/// Compile-time check that `Tool` is object-safe (we use `Box<dyn Tool>`
+/// in the `ToolHost`).
+#[allow(dead_code)]
+fn _tool_is_object_safe(_: &dyn Tool) {}

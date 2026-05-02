@@ -12,6 +12,116 @@ format change history.
 
 ### Added
 
+- **`uniclaw-tools` crate** — tool execution foundation (Phase 3 step 1
+  / step 13). Workspace member 13. Defines the trait surface every
+  later tool-related step plugs into; ships **architecture**, not a
+  runtime.
+  - `Tool` trait — `name`, `manifest`, `approval_policy(&call)`, `call`.
+    Sync (async runtimes wrap a sync impl in their own scheduling).
+  - `ToolManifest` — name, description, action_kind prefix,
+    `declared_capabilities: Vec<Capability>`, `default_approval`.
+  - `Capability` enum — 7 variants (`NetConnect`, `FileRead`,
+    `FileWrite`, `ShellExec`, `EnvRead`, `LlmQuery`, `SecretRead`)
+    each carrying a `GlobPattern`. Adopted from OpenFang's capability
+    pattern (master plan §6.2). Complements `ResourceUse`
+    (quantitative) — capabilities are qualitative.
+  - `GlobPattern` + own tiny matcher — `*`, `prefix*`, `*suffix`,
+    `*middle*`, and combinations. ~50 LOC, no_std, single-pass,
+    no backtracking pathology, no regex dep.
+  - `ApprovalPolicy { Never, Discretionary, Always }` on the trait —
+    adopted from IronClaw's two-phase approval pattern.
+  - `ToolHost` — `BTreeMap<String, Box<dyn Tool>>` registry.
+  - `ToolCall` / `ToolOutput` — both carry precomputed BLAKE3 hashes
+    so the kernel doesn't re-hash.
+  - `ToolError` — typed enum (NotFound / InvalidInput / Failed /
+    Timeout / CapabilityDenied) with `variant_name()` and
+    `message()` for receipt provenance.
+  - `NoopTool` builtin — identity tool, no capabilities, default
+    approval `Never`.
+- **Kernel: `KernelEvent::RecordToolExecution(Box<ToolExecution>)`**.
+  Mirrors the Approval flow's pattern — caller orchestrates external
+  tool execution, then submits the result to the kernel as a separate
+  event. Five-step authenticity gate:
+  1. Prior `allowed_receipt`'s Ed25519 signature verifies under issuer.
+  2. Issuer == this kernel's public key.
+  3. Prior receipt's `decision == Allowed`.
+  4. Prior receipt's `action.kind` starts with `"tool."`.
+  5. `original_proposal.action == allowed_receipt.body.action`.
+
+  Failures → `KernelError::RecordToolExecutionRejected(rejection)`,
+  no receipt minted, chain doesn't advance.
+- **Kernel: `OutcomeKind::ToolExecutedAllowed { input_hash, output_hash }`
+  / `ToolExecutedFailed { input_hash }`.** Both `Copy`-compatible (full
+  failure message lives in the receipt's `tool_execution_failure`
+  provenance edge so `OutcomeKind` stays `Copy + Eq`).
+- **Kernel: `ToolExecution` event input** — references the
+  previously-`Allowed` proposal receipt + the original proposal +
+  the tool's `Result<ToolOutput, ToolError>`.
+- **Receipts.** Successful executions get three provenance edges:
+  - `from = "receipt:<allowed_id>"`, `to = "tool:<name>"`,
+    `kind = "tool_execution"`
+  - `from = "receipt:<allowed_id>"`, `to = "input:<hex>"`,
+    `kind = "tool_input"`
+  - `from = "receipt:<allowed_id>"`, `to = "output:<hex>"`,
+    `kind = "tool_output"`
+
+  Failed executions get one edge: `kind = "tool_execution_failure"`,
+  `to = "error[<variant>]: <message>"`.
+- **All `uniclaw-tools` types re-exported through `uniclaw-kernel`** so
+  callers don't need a direct `uniclaw-tools` dep just to construct
+  `RecordToolExecution`.
+- **Phase 3 sub-step breakdown** added to `docs/03-roadmap.md` (steps
+  13–18: foundation → WASM runtime → capability enforcement → secret
+  broker → container fallback → output sanitization). Reflects the
+  refined plan after studying IronClaw / OpenFang / ZeroClaw /
+  OpenClaw. Master plan §28 Phase 3 stays canonical; the sub-step
+  breakdown lives in the docs tree.
+
+### Performance (bench-results/, gitignored — release, x86_64 Linux)
+
+- `RecordToolExecution` (success path, NoopTool, full Ed25519 verify
+  + sign + 3 provenance edges): **116.20 µs/req**
+- `RecordToolExecution` (failure path, 1 provenance edge): **91.53 µs/req**
+- `GlobPattern.matches` (28-char candidate, `*.example.com`): **327 ns/call**
+- `Capability.matches_request` (variant + glob): **118 ns/call**
+
+Cost is dominated by Ed25519 verify of the prior receipt + Ed25519 sign
+of the new one — same shape as the Approval flow. Glob matching is
+trivially cheap (single-pass, no backtracking).
+
+### Design study summary
+
+This step was preceded by parallel analysis of four reference claws
+(`IronClaw`, `OpenFang`, `OpenClaw`, `ZeroClaw`). What we adopted:
+
+- **OpenFang** — Capability enum + glob pattern matching (most
+  important architectural finding).
+- **IronClaw** — two-phase approval (`requires_approval(&params)` →
+  execute → `ActionRecord`), per-tool resource limits idea (lands at
+  step 14 with WASM runtime). Their WIT Component Model is also the
+  intended runtime for step 14, but sits behind a `WasmTool` adapter
+  so the trait surface stays backend-agnostic.
+- **OpenClaw** — gateway-level deny list philosophy (already
+  expressible as Constitution `Deny` rules — no extra step needed).
+- **ZeroClaw** — signed manifests with Ed25519 (queued for a future
+  step, with default-on signature verification rather than ZeroClaw's
+  default-off).
+
+No source borrowed from any of the four claws. Citations in
+`crates/uniclaw-tools/src/lib.rs` adopt-don't-copy section.
+
+### Tests
+
+- 34 new unit tests in `uniclaw-tools` (15 glob matcher + 5
+  capability + 4 tool error + 6 host + 4 noop tool).
+- 7 new integration tests in `uniclaw-kernel/tests/chain.rs`
+  (full success flow with NoopTool round-trip + failure path
+  provenance + 5 rejection variants of the authenticity gate, each
+  driven by a real Ed25519 signer).
+- Workspace test count: **188 → 229**, all passing.
+- New doc per the standing rule:
+  `docs/steps/13-tool-foundation.md`. Roadmap and docs index updated.
+
 - **HTML verifier UI on `uniclaw-host`** (Phase 2 step 4 / step 12).
   Closes the verifiability wedge to **non-engineers**: an auditor pastes
   a receipt JSON into `https://your-host/verify`, clicks Verify, and

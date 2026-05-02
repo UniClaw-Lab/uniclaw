@@ -35,8 +35,9 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 | 10 | SQLite-backed Receipt Store | Phase 2 | [steps/10-sqlite-receipt-store.md](steps/10-sqlite-receipt-store.md) |
 | 11 | Deep Sleep Integrity Walk | Phase 2 | [steps/11-deep-sleep.md](steps/11-deep-sleep.md) |
 | 12 | HTML Verifier UI | Phase 2 | [steps/12-html-verifier.md](steps/12-html-verifier.md) |
+| 13 | Tool Execution Foundation | Phase 3 | [steps/13-tool-foundation.md](steps/13-tool-foundation.md) |
 
-> **Note:** Phase 0 (the receipt format) is foundational and ships before Phase 1 step 1, so it's labeled "Step 0" in this index. Phase 1 has 8 numbered steps. Phase 2 begins at step 9.
+> **Note:** Phase 0 (the receipt format) is foundational and ships before Phase 1 step 1, so it's labeled "Step 0" in this index. Phase 1 has 8 numbered steps. Phase 2 has 4 numbered steps (9-12). Phase 3 begins at step 13.
 
 ## How to navigate
 
