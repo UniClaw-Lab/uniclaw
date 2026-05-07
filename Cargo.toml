@@ -14,6 +14,7 @@ members = [
     "crates/uniclaw-host",
     "crates/uniclaw-store-sqlite",
     "crates/uniclaw-tools",
+    "crates/uniclaw-tools-http",
 ]
 
 [workspace.package]
@@ -50,6 +51,15 @@ tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 # there's no system dependency; cost is ~1 MB binary size on the host crate.
 rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
 
+# HTTP client + URL parsing + base64 — used only by uniclaw-tools-http.
+# `ureq` is a synchronous HTTP client (matches the sync `Tool::call` trait);
+# `rustls` keeps TLS in pure Rust. `url` parses URLs robustly (including
+# IPv6-in-brackets and IDN). `base64` encodes response bodies for the
+# JSON envelope.
+ureq = { version = "2.10", default-features = false, features = ["tls"] }
+url = { version = "2.5", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
 # Internal members.
 uniclaw-receipt = { path = "crates/uniclaw-receipt", version = "0.0.1" }
 uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
@@ -63,6 +73,7 @@ uniclaw-sleep = { path = "crates/uniclaw-sleep", version = "0.0.1" }
 uniclaw-host = { path = "crates/uniclaw-host", version = "0.0.1" }
 uniclaw-store-sqlite = { path = "crates/uniclaw-store-sqlite", version = "0.0.1" }
 uniclaw-tools = { path = "crates/uniclaw-tools", version = "0.0.1" }
+uniclaw-tools-http = { path = "crates/uniclaw-tools-http", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]

@@ -207,6 +207,31 @@ impl Capability {
             Capability::SecretRead(_) => "secret_read",
         }
     }
+
+    /// Is `requested` granted by any capability in `declared`?
+    ///
+    /// Uses [`Capability::matches_request`] internally; runtime is
+    /// O(n) over the declared list (and n is small for typical tool
+    /// manifests). Returns a plain `bool` (rather than `Result<(),
+    /// _>`) so the caller decides how to surface a denial — most
+    /// tools wrap the negative path in
+    /// [`crate::ToolError::CapabilityDenied`] with the rejected
+    /// `Capability` attached:
+    ///
+    /// ```ignore
+    /// if !Capability::is_granted_by(&self.manifest.declared_capabilities, &requested) {
+    ///     return Err(ToolError::CapabilityDenied { attempted: requested });
+    /// }
+    /// ```
+    ///
+    /// This is the gate every `Tool` impl that exercises capabilities
+    /// at runtime should call before doing any I/O. The host layer
+    /// will eventually run it as a defense-in-depth check; until then
+    /// (Phase 3 step 14 onwards), each tool calls it directly.
+    #[must_use]
+    pub fn is_granted_by(declared: &[Capability], requested: &Capability) -> bool {
+        declared.iter().any(|d| d.matches_request(requested))
+    }
 }
 
 #[cfg(test)]
@@ -412,5 +437,52 @@ mod tests {
         let p2: GlobPattern = "foo*bar".to_string().into();
         assert_eq!(p1, p2);
         assert_eq!(p1.as_str(), "foo*bar");
+    }
+
+    // --- is_granted_by ---
+
+    #[test]
+    fn is_granted_by_empty_declared_set_denies_everything() {
+        let declared: alloc::vec::Vec<Capability> = alloc::vec::Vec::new();
+        let requested = Capability::NetConnect("api.example.com".into());
+        assert!(!Capability::is_granted_by(&declared, &requested));
+    }
+
+    #[test]
+    fn is_granted_by_finds_a_matching_declared_cap() {
+        let declared = alloc::vec![
+            Capability::FileRead("/etc/*".into()),
+            Capability::NetConnect("*.example.com".into()),
+        ];
+        let requested = Capability::NetConnect("api.example.com".into());
+        assert!(Capability::is_granted_by(&declared, &requested));
+    }
+
+    #[test]
+    fn is_granted_by_denies_when_only_a_different_variant_is_declared() {
+        let declared = alloc::vec![Capability::NetConnect("*".into())];
+        // FileRead is a different variant; even with NetConnect=* declared,
+        // FileRead is not granted.
+        let requested = Capability::FileRead("/etc/passwd".into());
+        assert!(!Capability::is_granted_by(&declared, &requested));
+    }
+
+    #[test]
+    fn is_granted_by_denies_when_glob_doesnt_cover_request() {
+        let declared = alloc::vec![Capability::NetConnect("*.example.com".into())];
+        let requested = Capability::NetConnect("evil.test".into());
+        assert!(!Capability::is_granted_by(&declared, &requested));
+    }
+
+    #[test]
+    fn is_granted_by_returns_grant_on_any_match() {
+        // Order doesn't matter for correctness, but exercising the
+        // "any declared cap grants" semantics.
+        let declared = alloc::vec![
+            Capability::NetConnect("api.example.com".into()),
+            Capability::FileRead("/tmp/*".into()),
+        ];
+        let requested = Capability::NetConnect("api.example.com".into());
+        assert!(Capability::is_granted_by(&declared, &requested));
     }
 }
