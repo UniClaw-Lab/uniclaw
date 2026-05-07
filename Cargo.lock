@@ -1352,6 +1352,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "uniclaw-secrets"
+version = "0.0.1"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "uniclaw-sleep"
 version = "0.0.1"
 dependencies = [
@@ -1402,6 +1409,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uniclaw-receipt",
+ "uniclaw-secrets",
  "uniclaw-tools",
  "ureq",
  "url",

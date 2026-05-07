@@ -72,36 +72,59 @@ mod envelope;
 mod ssrf;
 
 pub use config::HttpFetchConfig;
-pub use envelope::{HttpFetchInput, HttpFetchOutput};
+pub use envelope::{AuthSpec, HttpFetchInput, HttpFetchOutput};
 
 use std::io::Read;
+use std::sync::Arc;
 
 use base64::Engine;
 
 use uniclaw_receipt::Digest;
+use uniclaw_secrets::SecretBroker;
 use uniclaw_tools::{
-    ApprovalPolicy, Capability, GlobPattern, Tool, ToolCall, ToolError, ToolManifest, ToolOutput,
+    ApprovalPolicy, Capability, GlobPattern, Tool, ToolCall, ToolError, ToolManifest, ToolMetadata,
+    ToolOutput,
 };
 
 /// HTTP fetch tool. Implements [`Tool`] over `ureq`.
 ///
-/// Construct with [`HttpFetchTool::with_allowlist`] for the typical
-/// case (just a list of allowed-host glob patterns). Use
-/// [`HttpFetchTool::with_config`] to override timeouts, response-size
-/// limits, or — for tests — `allow_private_ips`.
+/// Four constructors, increasing in capability:
+///
+/// - [`HttpFetchTool::with_allowlist`] — minimal: pass an allowed-host
+///   glob list, get default config + no `SecretBroker`.
+///   Authenticated inputs (`HttpFetchInput::auth`) fail-closed.
+/// - [`HttpFetchTool::with_config`] — minimal + custom config.
+/// - [`HttpFetchTool::with_broker`] — minimal + a [`SecretBroker`] for
+///   authenticated requests.
+/// - [`HttpFetchTool::with_broker_and_config`] — both.
 pub struct HttpFetchTool {
     manifest: ToolManifest,
     config: HttpFetchConfig,
     agent: ureq::Agent,
+    /// Optional broker. When `None`, requests with
+    /// `HttpFetchInput::auth` set fail-closed with
+    /// `ToolError::Failed("input requested authentication but tool
+    /// has no SecretBroker configured")`.
+    broker: Option<Arc<dyn SecretBroker>>,
 }
 
 impl core::fmt::Debug for HttpFetchTool {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // ureq::Agent doesn't impl Debug — print the relevant fields.
+        // The broker field shows only "Some(...)" / "None"; we never
+        // try to print into it (it's `dyn SecretBroker`, no Debug).
         f.debug_struct("HttpFetchTool")
             .field("manifest", &self.manifest)
             .field("config", &self.config)
             .field("agent", &"<ureq::Agent>")
+            .field(
+                "broker",
+                &if self.broker.is_some() {
+                    "<configured>"
+                } else {
+                    "<none>"
+                },
+            )
             .finish()
     }
 }
@@ -109,15 +132,43 @@ impl core::fmt::Debug for HttpFetchTool {
 impl HttpFetchTool {
     /// Build a tool whose only declared capability is
     /// `NetConnect(host_pattern)` for each pattern in `allowed_hosts`.
-    /// Uses [`HttpFetchConfig::default`] for everything else.
+    /// Uses [`HttpFetchConfig::default`] for everything else; no
+    /// `SecretBroker` configured.
     #[must_use]
     pub fn with_allowlist(allowed_hosts: Vec<GlobPattern>) -> Self {
         Self::with_config(allowed_hosts, HttpFetchConfig::default())
     }
 
-    /// Build a tool with explicit config + allowed-hosts list.
+    /// Build a tool with explicit config + allowed-hosts list, no
+    /// `SecretBroker` configured.
     #[must_use]
     pub fn with_config(allowed_hosts: Vec<GlobPattern>, config: HttpFetchConfig) -> Self {
+        Self::build(allowed_hosts, config, None)
+    }
+
+    /// Build a tool with a `SecretBroker` for authenticated
+    /// requests; default config otherwise.
+    #[must_use]
+    pub fn with_broker(allowed_hosts: Vec<GlobPattern>, broker: Arc<dyn SecretBroker>) -> Self {
+        Self::build(allowed_hosts, HttpFetchConfig::default(), Some(broker))
+    }
+
+    /// Build a tool with both a `SecretBroker` and explicit config.
+    #[must_use]
+    pub fn with_broker_and_config(
+        allowed_hosts: Vec<GlobPattern>,
+        broker: Arc<dyn SecretBroker>,
+        config: HttpFetchConfig,
+    ) -> Self {
+        Self::build(allowed_hosts, config, Some(broker))
+    }
+
+    /// Internal constructor used by all four public ones.
+    fn build(
+        allowed_hosts: Vec<GlobPattern>,
+        config: HttpFetchConfig,
+        broker: Option<Arc<dyn SecretBroker>>,
+    ) -> Self {
         let manifest = ToolManifest {
             name: "http_fetch".to_string(),
             description: "GET an HTTP/HTTPS URL with capability and SSRF guards.".to_string(),
@@ -137,6 +188,7 @@ impl HttpFetchTool {
             manifest,
             config,
             agent,
+            broker,
         }
     }
 
@@ -144,6 +196,12 @@ impl HttpFetchTool {
     #[must_use]
     pub fn config(&self) -> &HttpFetchConfig {
         &self.config
+    }
+
+    /// True when a `SecretBroker` is configured. Read-only check.
+    #[must_use]
+    pub fn has_broker(&self) -> bool {
+        self.broker.is_some()
     }
 }
 
@@ -193,10 +251,45 @@ impl Tool for HttpFetchTool {
             )));
         }
 
-        // 5. Execute the GET. ureq surfaces 4xx/5xx as
+        // 5. Resolve authentication. If `input.auth` is set we MUST
+        //    have a `SecretBroker` configured — fail-closed otherwise
+        //    (silently dropping auth is the IronClaw failure mode we
+        //    explicitly avoid). Each resolved secret records its
+        //    *reference name* (never its value) into `secrets_used`,
+        //    which the kernel later reads off `ToolMetadata` to mint
+        //    `secret_used` provenance edges.
+        let mut req = self.agent.get(url.as_str());
+        let mut secrets_used: Vec<String> = Vec::new();
+        if let Some(auth) = &input.auth {
+            let broker = self.broker.as_ref().ok_or_else(|| {
+                ToolError::Failed(
+                    "input requested authentication but tool has no SecretBroker configured"
+                        .to_string(),
+                )
+            })?;
+            match auth {
+                AuthSpec::BearerHeader { secret_ref } => {
+                    let secret = broker.fetch(secret_ref).map_err(|e| {
+                        // The error preserves the secret *name* (which
+                        // the receipt audit trail will already see) but
+                        // not the value — `BrokerError`'s Display impl
+                        // is value-free by construction.
+                        ToolError::Failed(format!("failed to fetch secret '{secret_ref}': {e}"))
+                    })?;
+                    let header_value = format!("Bearer {}", secret.expose());
+                    req = req.set("Authorization", &header_value);
+                    secrets_used.push(secret_ref.clone());
+                    // `secret` (and its inner buffer) is dropped at
+                    // end of this block; SecretValue::Drop zeroes
+                    // the bytes.
+                }
+            }
+        }
+
+        // 6. Execute the GET. ureq surfaces 4xx/5xx as
         //    `Error::Status(code, response)`; we want the response
         //    either way, so accept both via Ok-or-Status.
-        let response = match self.agent.get(url.as_str()).call() {
+        let response = match req.call() {
             Ok(r) | Err(ureq::Error::Status(_, r)) => r,
             Err(ureq::Error::Transport(t)) => {
                 // All transport-layer failures (DNS, connect refused,
@@ -229,7 +322,7 @@ impl Tool for HttpFetchTool {
 
         let status: u16 = response.status();
 
-        // 6. Collect headers. v0 limitation: unique names only.
+        // 7. Collect headers. v0 limitation: unique names only.
         //    See "Known limitations" in crate docs.
         let header_names: Vec<String> = response.headers_names().into_iter().collect();
         let mut headers: Vec<(String, String)> = Vec::with_capacity(header_names.len());
@@ -239,7 +332,7 @@ impl Tool for HttpFetchTool {
             }
         }
 
-        // 7. Read body bounded by max_response_bytes. The +1 trick:
+        // 8. Read body bounded by max_response_bytes. The +1 trick:
         //    if we read exactly max+1 bytes, the body is too long
         //    and we refuse — without ever returning a truncated body.
         let max = self.config.max_response_bytes;
@@ -258,7 +351,7 @@ impl Tool for HttpFetchTool {
             )));
         }
 
-        // 8. Encode body + build envelope.
+        // 9. Encode body + build envelope.
         let body_b64 = base64::engine::general_purpose::STANDARD.encode(&body);
         let envelope = HttpFetchOutput {
             status,
@@ -266,15 +359,19 @@ impl Tool for HttpFetchTool {
             body_b64,
         };
 
-        // 9. Serialize envelope to JSON. The output_hash is over the
-        //    envelope bytes, not the raw body — so a verifier that
-        //    re-runs the tool with the same input gets a deterministic
-        //    match on the whole envelope (status + headers + body).
+        // 10. Serialize envelope to JSON. The output_hash is over the
+        //     envelope bytes, not the raw body — so a verifier that
+        //     re-runs the tool with the same input gets a deterministic
+        //     match on the whole envelope (status + headers + body).
         let bytes = serde_json::to_vec(&envelope)
             .map_err(|e| ToolError::Failed(format!("encode envelope: {e}")))?;
         let output_hash = Digest(*blake3::hash(&bytes).as_bytes());
 
-        Ok(ToolOutput { bytes, output_hash })
+        Ok(ToolOutput {
+            bytes,
+            output_hash,
+            metadata: ToolMetadata { secrets_used },
+        })
     }
 }
 
@@ -302,6 +399,7 @@ mod tests {
             target: "...".into(),
             input: serde_json::to_vec(&HttpFetchInput {
                 url: "https://evil.test/".into(),
+                auth: None,
             })
             .unwrap(),
             input_hash: Digest([0u8; 32]),
@@ -326,6 +424,7 @@ mod tests {
             target: "...".into(),
             input: serde_json::to_vec(&HttpFetchInput {
                 url: "http://127.0.0.1:9999/".into(),
+                auth: None,
             })
             .unwrap(),
             input_hash: Digest([0u8; 32]),
@@ -345,6 +444,7 @@ mod tests {
             target: "...".into(),
             input: serde_json::to_vec(&HttpFetchInput {
                 url: "http://10.0.0.1/".into(),
+                auth: None,
             })
             .unwrap(),
             input_hash: Digest([0u8; 32]),
@@ -361,6 +461,7 @@ mod tests {
             target: "...".into(),
             input: serde_json::to_vec(&HttpFetchInput {
                 url: "not-a-url".into(),
+                auth: None,
             })
             .unwrap(),
             input_hash: Digest([0u8; 32]),
@@ -377,6 +478,7 @@ mod tests {
             target: "...".into(),
             input: serde_json::to_vec(&HttpFetchInput {
                 url: "ftp://example.com/".into(),
+                auth: None,
             })
             .unwrap(),
             input_hash: Digest([0u8; 32]),
@@ -409,10 +511,150 @@ mod tests {
             target: "...".into(),
             input: serde_json::to_vec(&HttpFetchInput {
                 url: "https://api.example.com/".into(),
+                auth: None,
             })
             .unwrap(),
             input_hash: Digest([0u8; 32]),
         };
         assert_eq!(t.approval_policy(&call), ApprovalPolicy::Never);
+    }
+
+    // =====================================================================
+    // Auth gate (broker integration)
+    // =====================================================================
+    //
+    // The "happy path" auth tests live in tests/integration.rs because
+    // they need a localhost mock server to verify the Authorization
+    // header actually reached the wire. Here we only cover the
+    // input-validation paths that don't open a socket.
+
+    #[test]
+    fn auth_set_with_no_broker_fails_closed_before_network() {
+        // Allow * so the capability gate is permissive; no broker is
+        // installed. Fetching a localhost URL would trip SSRF if we
+        // got that far, but `Failed("...has no SecretBroker
+        // configured")` should fire first because the auth check is
+        // step 5 (after capability + SSRF, before the GET).
+        //
+        // We use a non-loopback public-ish URL so SSRF doesn't fire;
+        // the auth gate fires before the network does.
+        let t = HttpFetchTool::with_allowlist(vec![GlobPattern::new("api.example.com")]);
+        assert!(!t.has_broker(), "test precondition: no broker");
+        let call = ToolCall {
+            tool_name: "http_fetch".into(),
+            target: "...".into(),
+            input: serde_json::to_vec(&HttpFetchInput {
+                url: "https://api.example.com/me".into(),
+                auth: Some(AuthSpec::BearerHeader {
+                    secret_ref: "github.token".into(),
+                }),
+            })
+            .unwrap(),
+            input_hash: Digest([0u8; 32]),
+        };
+        let err = t.call(&call).unwrap_err();
+        match err {
+            ToolError::Failed(msg) => {
+                assert!(
+                    msg.contains("SecretBroker"),
+                    "expected fail-closed message mentioning SecretBroker, got: {msg}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auth_set_with_unknown_secret_fails_closed_before_network() {
+        // A broker is configured, but it doesn't know the secret. The
+        // tool must surface the BrokerError as Failed (not silently
+        // proceed unauthenticated).
+        let broker = Arc::new(uniclaw_secrets::InMemorySecretBroker::new());
+        let t = HttpFetchTool::with_broker(vec![GlobPattern::new("api.example.com")], broker);
+        assert!(t.has_broker());
+        let call = ToolCall {
+            tool_name: "http_fetch".into(),
+            target: "...".into(),
+            input: serde_json::to_vec(&HttpFetchInput {
+                url: "https://api.example.com/".into(),
+                auth: Some(AuthSpec::BearerHeader {
+                    secret_ref: "github.token".into(),
+                }),
+            })
+            .unwrap(),
+            input_hash: Digest([0u8; 32]),
+        };
+        let err = t.call(&call).unwrap_err();
+        match err {
+            ToolError::Failed(msg) => {
+                assert!(
+                    msg.contains("github.token"),
+                    "expected secret name in error, got: {msg}"
+                );
+                assert!(
+                    msg.contains("not found") || msg.contains("fetch"),
+                    "expected lookup-failure wording, got: {msg}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn capability_gate_runs_before_auth_gate() {
+        // If the host is denied, we must error with CapabilityDenied —
+        // not with a SecretBroker complaint. The capability gate is
+        // step 3, the auth gate is step 5.
+        let t = HttpFetchTool::with_allowlist(vec![GlobPattern::new("api.example.com")]);
+        let call = ToolCall {
+            tool_name: "http_fetch".into(),
+            target: "...".into(),
+            input: serde_json::to_vec(&HttpFetchInput {
+                url: "https://evil.test/".into(),
+                auth: Some(AuthSpec::BearerHeader {
+                    secret_ref: "github.token".into(),
+                }),
+            })
+            .unwrap(),
+            input_hash: Digest([0u8; 32]),
+        };
+        let err = t.call(&call).unwrap_err();
+        assert!(
+            matches!(err, ToolError::CapabilityDenied { .. }),
+            "expected capability gate to fire before auth gate, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn no_auth_means_no_broker_required() {
+        // A tool without a broker can still serve unauthenticated
+        // requests. We test up to the capability gate (further would
+        // need a network mock); the point is that the auth check
+        // doesn't complain when input.auth is None.
+        let t = HttpFetchTool::with_allowlist(vec![GlobPattern::new("api.example.com")]);
+        let call = ToolCall {
+            tool_name: "http_fetch".into(),
+            target: "...".into(),
+            input: serde_json::to_vec(&HttpFetchInput {
+                url: "https://denied.test/".into(),
+                auth: None,
+            })
+            .unwrap(),
+            input_hash: Digest([0u8; 32]),
+        };
+        // Fails on the capability gate, NOT on a missing-broker
+        // complaint — proving the auth path was a no-op.
+        let err = t.call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::CapabilityDenied { .. }));
+    }
+
+    #[test]
+    fn has_broker_reflects_constructor() {
+        let no_broker = HttpFetchTool::with_allowlist(vec![GlobPattern::new("*")]);
+        assert!(!no_broker.has_broker());
+
+        let broker = Arc::new(uniclaw_secrets::InMemorySecretBroker::new());
+        let with_broker = HttpFetchTool::with_broker(vec![GlobPattern::new("*")], broker.clone());
+        assert!(with_broker.has_broker());
     }
 }

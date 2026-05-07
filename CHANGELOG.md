@@ -12,6 +12,91 @@ format change history.
 
 ### Added
 
+- **`uniclaw-secrets` crate** — typed surface for credential injection
+  (Phase 3 step 3 / step 15). Workspace member 15.
+  - `SecretValue` — drop-zeroizing buffer (via the `zeroize` crate),
+    redacted Debug (`SecretValue([REDACTED, len=N])`), no `Display`,
+    no `Serialize`, no `Clone`, no `Default`. The shape is hostile to
+    accidental logging by construction; `expose(&self) -> &str`
+    returns a borrow that lives no longer than the broker call.
+  - `SecretBroker` trait — one method, `fetch(name) -> Result<SecretValue,
+    BrokerError>`. `Send + Sync` so brokers thread through
+    `Arc<dyn SecretBroker>` cleanly. `BrokerError` distinguishes
+    `NotFound`, `AccessDenied`, `Backend(String)`; the Display impl
+    is value-free by construction (the secret value isn't part of the
+    type).
+  - `InMemorySecretBroker` — `BTreeMap`-backed reference impl.
+    `insert(name, value)` / `insert_string(name, secret)`; Debug
+    prints only the registered count (no names, no values). `fetch`
+    re-allocates a fresh `SecretValue` per call (since
+    `SecretValue: !Clone` is deliberate).
+  - `EnvSecretBroker` — reads from environment variables under a
+    configurable prefix. `env_var_name(secret_ref)` transforms
+    `github.token` → `<PREFIX>GITHUB_TOKEN` (uppercase, `.` and `-`
+    become `_`, other chars dropped). The env model inherits its
+    threat model (OS sees plaintext, child processes may inherit) —
+    documented in the crate doc.
+  - **Adopt-don't-copy citations** in `lib.rs` and `broker.rs`:
+    `IronClaw`'s fail-closed broker pattern, `OpenClaw`'s
+    secret-reference (not value) audit model, `ZeroClaw`'s
+    drop-zeroing discipline. The `zeroize` crate is the only new
+    runtime dependency.
+- **`HttpFetchTool` authentication** (Phase 3 step 15, in
+  `uniclaw-tools-http`).
+  - Three new constructors: `with_broker(allowed_hosts, broker)`,
+    `with_broker_and_config(allowed_hosts, broker, config)`, plus a
+    `has_broker()` accessor. `with_allowlist` and `with_config` keep
+    their existing meaning (no broker → unauthenticated requests
+    only).
+  - `HttpFetchInput` gains an optional `auth: AuthSpec` field. v0
+    supports `AuthSpec::BearerHeader { secret_ref: String }`; the
+    JSON shape is tagged (`{"type":"bearer_header","secret_ref":...}`)
+    so future variants land additively. `#[serde(default)]` on the
+    field keeps existing receipts parseable.
+  - `Tool::call` resolves the auth spec **after** the capability and
+    SSRF gates and **before** the HTTP request: broker not configured
+    or `BrokerError` from `fetch` — both fail-closed with
+    `ToolError::Failed`, **no socket opened**. Two integration tests
+    pin the no-IO property by asserting the mock server's captured
+    requests are empty after a fail-closed call.
+  - On success, the resolved secret is set as
+    `Authorization: Bearer <value>` for the duration of the request
+    only; the `SecretValue` is dropped (zeroed) at the end of the auth
+    block. Test
+    `authenticated_request_injects_authorization_bearer_header`
+    asserts the header reaches the wire with the expected value.
+- **`ToolOutput::metadata`** (`uniclaw-tools`). New
+  `ToolMetadata { secrets_used: Vec<String> }` field. Carries the
+  *reference names* of secrets a tool consumed during a call; values
+  never appear here. Backwards-compatible additive change — a tool
+  that consumes no secrets returns
+  `metadata: ToolMetadata::default()`. All existing tools
+  (`NoopTool`, `HttpFetchTool` unauthenticated path) populate empty
+  metadata; only the auth path of `HttpFetchTool` writes a non-empty
+  list.
+- **`secret_used` provenance edges** in
+  `Kernel::handle_record_tool_execution`. For each `secret_ref` in
+  `output.metadata.secrets_used`, the kernel mints one
+  `ProvenanceEdge { from: "receipt:<allowed_id_hex>", to:
+  "secret:<ref>", kind: "secret_used" }` alongside the existing
+  `tool_execution` / `tool_input` / `tool_output` edges. Auditors
+  walking the receipt log can now answer "which receipts touched
+  `secret:<X>`?" by structural query — without re-running tools and
+  without ever seeing values.
+- **Two new kernel tests** for the provenance integration:
+  `tool_execution_emits_secret_used_provenance_edges_for_each_used_secret`
+  (3 base + N secret edges, exact format check, no values anywhere
+  in the receipt body) and
+  `tool_execution_with_no_secrets_used_emits_only_base_edges` (sanity
+  check that empty `secrets_used` produces no placeholder edges).
+- **Step 15 doc** — [`docs/steps/15-secret-broker.md`](docs/steps/15-secret-broker.md)
+  walks through the trust model, fail-closed semantics, kernel
+  integration, perf baseline, and explicit deferrals (multi-secret
+  per call, BasicAuth/CustomHeader/SigV4, ACL-by-caller, real Vault
+  / AWS Secrets Manager / GCP Secret Manager backends, signed-config
+  provenance, sanitization of secrets out of tool output bodies — all
+  on the future-step list).
+
 - **`uniclaw-tools-http` crate** — first real tool implementation
   (Phase 3 step 2 / step 14). Workspace member 14. Validates the
   trait surface from step 13 against actual network code, with three
@@ -52,6 +137,18 @@ format change history.
 
 ### Changed
 
+- `uniclaw-tools-http` now depends on `uniclaw-secrets` (regular
+  dep). The `serde` feature `alloc` is now enabled in
+  `uniclaw-tools-http` to support the tagged-enum derive on
+  `AuthSpec` (workspace `serde` has `default-features = false`,
+  which lacks the alloc-gated `TaggedContentVisitor` needed by
+  `#[serde(tag = "...")]`).
+- All `ToolOutput` construction sites in the kernel and its tests
+  updated to include `metadata: ToolMetadata::default()` (or a
+  populated metadata, where applicable).
+- `HttpFetchTool::Debug` impl now prints `broker: "<configured>"` /
+  `"<none>"` rather than attempting to format the `dyn SecretBroker`
+  (which has no `Debug` requirement, deliberately).
 - Phase 3 sub-step plan in `docs/03-roadmap.md` reordered. The
   original step 13 PR proposed `13 → WASM → caps → secrets → container
   → sanitization`. This PR confirms a better order:

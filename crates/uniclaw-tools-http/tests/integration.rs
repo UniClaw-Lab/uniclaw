@@ -17,6 +17,7 @@ use std::time::Duration;
 use base64::Engine;
 
 use uniclaw_receipt::Digest;
+use uniclaw_secrets::InMemorySecretBroker;
 use uniclaw_tools::{Capability, GlobPattern, Tool, ToolCall, ToolError};
 use uniclaw_tools_http::{HttpFetchConfig, HttpFetchInput, HttpFetchOutput, HttpFetchTool};
 
@@ -56,11 +57,37 @@ impl Response {
     }
 }
 
+/// One captured request as the server saw it: parsed headers from
+/// the request line block. Tests use this to verify e.g. an
+/// `Authorization` header was actually injected on the wire.
+///
+/// Note: we don't capture path/method here because the existing
+/// `routes` callback already gets the path. Add fields if a future
+/// test needs to assert on more than headers.
+#[derive(Debug, Clone)]
+struct Captured {
+    headers: Vec<(String, String)>,
+}
+
+impl Captured {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
 /// Blocking single-threaded mock server bound to 127.0.0.1:0. The
 /// `MockServer` Drop signals the loop to stop.
+///
+/// Every served request is recorded into `captures` so tests can
+/// assert on what reached the wire (header values, path, etc.) — used
+/// for the auth-injection tests.
 struct MockServer {
     addr: String,
     stop: Arc<Mutex<bool>>,
+    captures: Arc<Mutex<Vec<Captured>>>,
 }
 
 impl MockServer {
@@ -74,6 +101,8 @@ impl MockServer {
         let stop = Arc::new(Mutex::new(false));
         let stop_for_thread = stop.clone();
         let routes = Arc::new(routes);
+        let captures: Arc<Mutex<Vec<Captured>>> = Arc::new(Mutex::new(Vec::new()));
+        let captures_for_thread = captures.clone();
 
         let (ready_tx, ready_rx) = mpsc::channel::<()>();
 
@@ -86,8 +115,9 @@ impl MockServer {
                 match listener.accept() {
                     Ok((stream, _peer)) => {
                         let routes = routes.clone();
+                        let captures = captures_for_thread.clone();
                         thread::spawn(move || {
-                            let _ = handle_one(stream, routes.as_ref());
+                            let _ = handle_one(stream, routes.as_ref(), &captures);
                         });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -100,11 +130,20 @@ impl MockServer {
         // Wait for the listener loop to be live before returning.
         let _ = ready_rx.recv_timeout(Duration::from_secs(1));
 
-        Self { addr, stop }
+        Self {
+            addr,
+            stop,
+            captures,
+        }
     }
 
     fn url(&self, path: &str) -> String {
         format!("http://{}{path}", self.addr)
+    }
+
+    /// Snapshot of every request the server has handled so far.
+    fn captured(&self) -> Vec<Captured> {
+        self.captures.lock().unwrap().clone()
     }
 }
 
@@ -119,6 +158,7 @@ impl Drop for MockServer {
 fn handle_one(
     mut stream: TcpStream,
     routes: &(dyn Fn(&str) -> Response + Send + Sync),
+    captures: &Mutex<Vec<Captured>>,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -141,6 +181,20 @@ fn handle_one(
     }
     let req = String::from_utf8_lossy(&acc).to_string();
     let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+
+    // Parse headers — second line onward, up to the empty separator.
+    // Values keep their original case (HTTP headers are case-insensitive
+    // by name, case-preserving by value).
+    let mut headers: Vec<(String, String)> = Vec::new();
+    for line in req.lines().skip(1) {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            headers.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    captures.lock().unwrap().push(Captured { headers });
 
     let resp = routes(&path);
     if let Some(d) = resp.delay {
@@ -173,6 +227,24 @@ fn make_call(url: &str) -> ToolCall {
         target: url.into(),
         input: serde_json::to_vec(&HttpFetchInput {
             url: url.to_string(),
+            auth: None,
+        })
+        .unwrap(),
+        input_hash: Digest([0u8; 32]),
+    }
+}
+
+/// Variant of `make_call` that attaches a [`uniclaw_tools_http::AuthSpec`]
+/// directing the tool to inject `Authorization: Bearer <broker[ref]>`.
+fn make_auth_call(url: &str, secret_ref: &str) -> ToolCall {
+    ToolCall {
+        tool_name: "http_fetch".into(),
+        target: url.into(),
+        input: serde_json::to_vec(&HttpFetchInput {
+            url: url.to_string(),
+            auth: Some(uniclaw_tools_http::AuthSpec::BearerHeader {
+                secret_ref: secret_ref.to_string(),
+            }),
         })
         .unwrap(),
         input_hash: Digest([0u8; 32]),
@@ -368,6 +440,130 @@ fn non_utf8_response_body_survives_base64_round_trip() {
         .decode(&env.body_b64)
         .expect("valid base64");
     assert_eq!(decoded, bytes);
+}
+
+// =====================================================================
+// 3xx is NOT auto-followed
+// =====================================================================
+
+// =====================================================================
+// Auth: SecretBroker injects Authorization header on the wire
+// =====================================================================
+
+#[test]
+fn authenticated_request_injects_authorization_bearer_header() {
+    let server = MockServer::start(|_| Response::ok(b"hello".to_vec()));
+
+    let mut broker = InMemorySecretBroker::new();
+    broker.insert_string("github.token", "ghp_secret_xyz".to_string());
+    let tool = HttpFetchTool::with_broker_and_config(
+        vec![GlobPattern::new("127.0.0.1")],
+        Arc::new(broker),
+        HttpFetchConfig::for_test_localhost(),
+    );
+
+    let out = tool
+        .call(&make_auth_call(&server.url("/"), "github.token"))
+        .expect("authenticated request should succeed");
+
+    // Metadata records the *reference name*, not the value. The
+    // kernel reads this off `output.metadata.secrets_used` to mint
+    // `secret_used` provenance edges in the receipt.
+    assert_eq!(out.metadata.secrets_used, vec!["github.token".to_string()]);
+
+    let captured = server.captured();
+    assert!(
+        !captured.is_empty(),
+        "server should have received a request"
+    );
+    let auth = captured[0].header("authorization");
+    assert_eq!(
+        auth,
+        Some("Bearer ghp_secret_xyz"),
+        "tool must inject Authorization: Bearer <value> on the wire"
+    );
+}
+
+#[test]
+fn unauthenticated_request_carries_no_authorization_header() {
+    let server = MockServer::start(|_| Response::ok(b"hello".to_vec()));
+    let tool = tool_for_localhost();
+
+    let out = tool.call(&make_call(&server.url("/"))).expect("ok");
+    assert!(
+        out.metadata.secrets_used.is_empty(),
+        "no secret was used; metadata should be empty"
+    );
+
+    let captured = server.captured();
+    assert!(
+        !captured.is_empty(),
+        "server should have received a request"
+    );
+    assert!(
+        captured[0].header("authorization").is_none(),
+        "no Authorization header on an unauthenticated request"
+    );
+}
+
+#[test]
+fn unknown_secret_fails_closed_without_opening_a_socket() {
+    // Empty broker — the tool can't satisfy `auth`. The fail-closed
+    // semantic is: surface the error AND don't make any network IO.
+    // We assert both: an Err result, and zero captured requests.
+    let server = MockServer::start(|_| Response::ok(b"unreachable".to_vec()));
+    let broker = InMemorySecretBroker::new(); // empty
+    let tool = HttpFetchTool::with_broker_and_config(
+        vec![GlobPattern::new("127.0.0.1")],
+        Arc::new(broker),
+        HttpFetchConfig::for_test_localhost(),
+    );
+
+    let err = tool
+        .call(&make_auth_call(&server.url("/"), "github.token"))
+        .expect_err("unknown secret must fail");
+    match err {
+        ToolError::Failed(msg) => {
+            assert!(
+                msg.contains("github.token"),
+                "expected secret name in error message, got: {msg}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+
+    assert!(
+        server.captured().is_empty(),
+        "no network IO should fire when the broker can't satisfy auth"
+    );
+}
+
+#[test]
+fn auth_input_with_no_broker_fails_closed_without_opening_a_socket() {
+    // Same fail-closed property, different cause: the tool was built
+    // without a broker but the input asks for auth. The point of
+    // having two tests is that one exercises the "broker missing"
+    // branch and the other exercises the "broker fetch failed"
+    // branch — both must short-circuit before any socket opens.
+    let server = MockServer::start(|_| Response::ok(b"unreachable".to_vec()));
+    let tool = HttpFetchTool::with_config(
+        vec![GlobPattern::new("127.0.0.1")],
+        HttpFetchConfig::for_test_localhost(),
+    );
+    assert!(!tool.has_broker());
+
+    let err = tool
+        .call(&make_auth_call(&server.url("/"), "github.token"))
+        .expect_err("missing broker must fail");
+    match err {
+        ToolError::Failed(msg) => assert!(msg.contains("SecretBroker"), "got: {msg}"),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+
+    assert!(
+        server.captured().is_empty(),
+        "no network IO should fire when no broker is configured"
+    );
 }
 
 // =====================================================================

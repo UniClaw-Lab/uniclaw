@@ -90,8 +90,15 @@ pub struct ToolCall {
 
 /// The output of a successful tool call.
 ///
-/// Same input/output-hash treatment as [`ToolCall`]: bytes plus a
-/// precomputed BLAKE3 digest.
+/// Two parts:
+///
+/// - **`bytes` + `output_hash`** — what the agent sees. Whatever the
+///   tool returned, plus a precomputed BLAKE3 hash for the receipt.
+/// - **`metadata`** — what the **receipt** records but the agent
+///   doesn't see. Mostly audit-only fields that belong in the
+///   provenance graph (which secrets the tool used, future cache-hit
+///   bookkeeping, etc.). Keeps audit metadata out of the bytes the
+///   model gets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
     /// Raw output bytes the tool produced.
@@ -99,6 +106,31 @@ pub struct ToolOutput {
     /// BLAKE3 hash of `bytes`. Computed once by the tool (or its
     /// adapter); the kernel uses it directly in the receipt.
     pub output_hash: Digest,
+    /// Audit-only metadata. The kernel reads this when minting the
+    /// `$kernel/tool/executed` receipt, adding one provenance edge
+    /// per recorded fact (`secret_used`, etc.). The agent never sees
+    /// these bytes; they exist so the receipt can record what
+    /// happened without poisoning the agent's view.
+    pub metadata: ToolMetadata,
+}
+
+/// Audit metadata attached to a tool's output.
+///
+/// Each field maps to one or more provenance edges on the
+/// `$kernel/tool/executed` receipt. The struct is purely additive —
+/// new audit facts land here without changing
+/// [`ToolOutput`]'s top-level shape.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolMetadata {
+    /// Reference names (NOT values) of secrets the tool fetched
+    /// from the broker during this call. The kernel adds one
+    /// provenance edge per name with `kind = "secret_used"`. Tools
+    /// that don't use secrets leave this empty (the default).
+    ///
+    /// Example: a tool that fetched `github.token` and
+    /// `slack.webhook` would set
+    /// `secrets_used: vec!["github.token".into(), "slack.webhook".into()]`.
+    pub secrets_used: Vec<String>,
 }
 
 /// Why a tool call failed.
