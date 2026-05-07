@@ -4,8 +4,7 @@
 
 Uniclaw is a verifiable universal agent runtime built in Rust. It produces signed, third-party-verifiable **receipts** for every consequential agent action — so you can hand a regulator, an auditor, a customer, or a judge a URL that proves what your agent did, without trusting the runtime that produced it.
 
-🦀🦞 Successor to `openclaw | zeroclaw | nanoclaw | openfang | nemoclaw | picoclaw | nullclaw | ironclaw | localclaw`. Adopts designs; never copies code.
-
+🦀+🦞
 ## Status
 
 **Pre-alpha.** Phase 0 (Receipt-First Foundation) is in progress.
