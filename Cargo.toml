@@ -16,6 +16,7 @@ members = [
     "crates/uniclaw-tools",
     "crates/uniclaw-tools-http",
     "crates/uniclaw-secrets",
+    "crates/uniclaw-tools-wasm",
 ]
 
 [workspace.package]
@@ -67,6 +68,19 @@ ureq = { version = "2.10", default-features = false, features = ["tls"] }
 url = { version = "2.5", default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
+# WebAssembly runtime — used only by uniclaw-tools-wasm.
+# `wasmtime` is the reference AOT-compiling WASM runtime with stable
+# Component Model support (we use core wasm in this step; 16b will
+# layer Component Model on top). Default features include the
+# Cranelift compiler, the JIT runtime, and component-model bindings —
+# all of which we want, so no trimming for now. The dep tree is
+# substantial; treat it as the price of admission for any production
+# WASM runtime.
+# `wat` is a dev-only tool that compiles the human-readable WebAssembly
+# Text format to wasm bytes — used by tests so fixtures stay readable.
+wasmtime = "44"
+wat = "1"
+
 # Internal members.
 uniclaw-receipt = { path = "crates/uniclaw-receipt", version = "0.0.1" }
 uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
@@ -82,6 +96,7 @@ uniclaw-store-sqlite = { path = "crates/uniclaw-store-sqlite", version = "0.0.1"
 uniclaw-tools = { path = "crates/uniclaw-tools", version = "0.0.1" }
 uniclaw-tools-http = { path = "crates/uniclaw-tools-http", version = "0.0.1" }
 uniclaw-secrets = { path = "crates/uniclaw-secrets", version = "0.0.1" }
+uniclaw-tools-wasm = { path = "crates/uniclaw-tools-wasm", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]
