@@ -12,6 +12,84 @@ format change history.
 
 ### Added
 
+- **`uniclaw-tools-http` crate** — first real tool implementation
+  (Phase 3 step 2 / step 14). Workspace member 14. Validates the
+  trait surface from step 13 against actual network code, with three
+  defenses wired in.
+  - `HttpFetchTool` implements `Tool`. Synchronous GET via `ureq`
+    (rustls TLS, no `tokio` / `reqwest` heaviness); JSON envelope
+    input/output (`{"url": …}` → `{"status": …, "headers": [(name,
+    value)…], "body_b64": …}`).
+  - **Capability allowlist**: each tool is constructed with a list
+    of `GlobPattern`s; every request passes through
+    `Capability::is_granted_by(declared, requested)` before the HTTP
+    client is touched. Denied requests fail with
+    `ToolError::CapabilityDenied { attempted }` — no socket opened.
+  - **SSRF defense**: literal-IP requests to private / loopback /
+    link-local / multicast / reserved / IPv4-mapped-IPv6 ranges are
+    refused by default. RFC-cited table in
+    `uniclaw-tools-http/src/ssrf.rs`. Production config has
+    `allow_private_ips: false`; tests use
+    `HttpFetchConfig::for_test_localhost()` for `127.0.0.1`.
+  - **Bounded read**: `max_response_bytes` (default 10 MiB) enforced
+    via `Read::take(max + 1)`; oversize fails with
+    `ToolError::Failed`, partial bodies are never returned.
+  - **No auto-redirects**: `ureq::AgentBuilder::redirects(0)`. A 3xx
+    is surfaced as the actual status + Location header; the caller
+    decides whether to follow (and that follow goes through the
+    capability allowlist again).
+  - Configurable timeout (default 30 s), fixed User-Agent
+    `uniclaw-tools-http/<version>`.
+- **`uniclaw-tools::Capability::is_granted_by(&[Capability], &Capability) -> bool`**
+  helper — small additive to the existing crate. Other tool crates
+  (next: `uniclaw-tools-fs`, `uniclaw-tools-shell`, …) will use the
+  same gate.
+- 45 new tests (14 `uniclaw-tools-http` unit + 8
+  `uniclaw-tools-http` integration against a hand-rolled localhost
+  mock server + 5 new `Capability::is_granted_by` unit tests + the
+  pre-existing 8 unit + 7 kernel integration carried forward from
+  step 13). Workspace test count: **229 → 274**.
+
+### Changed
+
+- Phase 3 sub-step plan in `docs/03-roadmap.md` reordered. The
+  original step 13 PR proposed `13 → WASM → caps → secrets → container
+  → sanitization`. This PR confirms a better order:
+  `13 → HTTP+caps → secrets → WASM → container → sanitization`.
+  Reason: WASM-with-I/O depends on capability enforcement, and
+  capability enforcement is best validated against a real native
+  tool first. Native HTTP first → secrets next → WASM with both
+  already proven.
+
+### Performance (release, x86_64 Linux, localhost mock server with `connection: close`)
+
+- `HttpFetchTool` warm fetch, 5-byte body: **~25 ms/call**
+- `HttpFetchTool` warm fetch, 1 MiB body: **~94 ms/call** (~11 MiB/s)
+- `Capability::is_granted_by`: sub-microsecond (single-pass glob match)
+- `ssrf::is_disallowed_ip`: sub-microsecond
+
+The fetch numbers are dominated by TCP setup + the mock's per-request
+thread spawn (the mock returns `connection: close`, defeating ureq's
+keep-alive). Real-world deployments against a keep-alive server see
+warm fetches in the low single-digit milliseconds. The capability
+and SSRF gates are not visible in the totals.
+
+### Adopt-don't-copy
+
+- **`IronClaw`'s SSRF defense** — adopted as `uniclaw-tools-http::ssrf`.
+  Same RFC table; we add the IPv6 side. No source borrowed.
+- **`OpenFang`'s capability-enforcement-at-the-tool-boundary pattern**
+  — adopted as `Capability::is_granted_by` called from
+  `HttpFetchTool::call` before any I/O.
+
+Cited in `crates/uniclaw-tools-http/src/lib.rs` and `ssrf.rs`.
+
+### Notes
+
+- New doc per the standing rule:
+  `docs/steps/14-http-fetch-tool.md`. Roadmap and docs index
+  updated to reflect the reorder.
+
 - **`uniclaw-tools` crate** — tool execution foundation (Phase 3 step 1
   / step 13). Workspace member 13. Defines the trait surface every
   later tool-related step plugs into; ships **architecture**, not a
