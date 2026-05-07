@@ -16,6 +16,7 @@ categories.workspace = true
 uniclaw-receipt.workspace = true
 uniclaw-tools.workspace = true
 wasmtime.workspace = true
+wasmtime-wasi.workspace = true
 blake3.workspace = true
 # `wat` is a regular dep (not dev-only) because [`WasmTool::from_wat`]
 # in the public API takes WAT text and compiles it inline. Production

@@ -12,6 +12,89 @@ format change history.
 
 ### Added
 
+- **WASM Component Model layer** (Phase 3 step 4b / step 16b) — the
+  typed-interface upgrade on top of 16a's runtime skeleton. Tools
+  can now be authored as Component-Model wasm against a small WIT
+  and the host drives them through `wasmtime::component::bindgen!`-
+  generated bindings instead of the packed-i64 trick from 16a.
+  Both paths coexist behind the same `Tool` trait; tools choose.
+  - `crates/uniclaw-tools-wasm/wit/tool.wit` defines
+    `uniclaw:tool@0.1.0` with a single interface `tool-api`
+    exporting `call: func(input: list<u8>) -> result<list<u8>,
+    string>`. The world `tool` exports `tool-api` and imports
+    nothing — host imports land in 16c via a separate
+    `tool-with-host` world.
+  - `crates/uniclaw-tools-wasm/src/bindings.rs` invokes
+    `wasmtime::component::bindgen!` to generate the host
+    bindings. Guarded with module-level allow-lints because the
+    generator's emitted code triggers pedantic warnings that
+    are out of our control.
+  - New constructor `WasmTool::from_component_bytes(bytes,
+    manifest, config)` mirrors `from_module_bytes` but for
+    Component Model bytes. Internally `WasmTool` now holds a
+    `WasmKind { Core(Module), Component(Component) }` enum;
+    `Tool::call` dispatches based on what the constructor
+    recorded.
+  - The Component path uses `bindings::Tool::instantiate(...)`
+    + `instance.uniclaw_tool_tool_api().call_call(...)`. The
+    canonical ABI handles host↔guest memory ownership (no more
+    `alloc`/packed-i64 plumbing). Guest-arm `Err(string)`
+    surfaces as `ToolError::Failed("guest: <msg>")`; sandbox
+    failures (fuel/epoch/memory) still surface unchanged from
+    16a.
+  - **Test fixture**: a committed Rust→WASM Component at
+    `tests/fixtures/echo-component.wasm` (~46 KB). Source is at
+    `tests/fixtures/echo-component/` with a `BUILD.md` next to
+    it documenting the local-build path
+    (`cargo install cargo-component` + `cargo component build
+    --release`). CI doesn't rebuild — the artefact is the
+    single source of truth for tests; reviewers can rebuild
+    locally to verify.
+  - **`wasmtime-wasi` dep** added to the workspace and to
+    `uniclaw-tools-wasm`. A Rust→WASM Component built against
+    `wasm32-wasip2` automatically declares WASI imports
+    regardless of whether it touches them; without those
+    imports satisfied on the host, instantiation fails. We
+    register an empty WASI context per call (no preopens, no
+    env, no stdio passthrough) — strictly to make the imports
+    linkable, not to grant any capability. Step 16c replaces
+    this with capability-checked Uniclaw imports.
+  - `MemoryLimiter` retired; replaced with `StoreData` that
+    holds the memory cap PLUS the WASI ctx + resource table.
+    Same per-call freshness guarantee — each call gets its
+    own store with its own state, nothing leaks. Implements
+    both `wasmtime::ResourceLimiter` and
+    `wasmtime_wasi::WasiView`.
+  - 7 new integration tests for the Component path:
+    `component_echo_returns_input_verbatim_via_canonical_abi`,
+    `component_guest_error_arm_surfaces_as_failed`,
+    `component_call_handles_4kib_input`,
+    `component_multiple_calls_have_independent_state`,
+    `component_with_zero_fuel_traps_with_failed`,
+    `component_invalid_bytes_fail_at_construction`,
+    `core_wasm_bytes_rejected_by_from_component_bytes`. All
+    14 16a tests still pass unchanged.
+  - **Adopt-don't-copy citations**: IronClaw's `near:agent@0.3.0`
+    WIT package design (richer `record request/response` shape
+    with JSON strings + `schema()`/`description()` exports —
+    ours is a leaner `list<u8>` / `result<list<u8>, string>`
+    surface; richer pattern is on the future-step list);
+    IronClaw's `bindings.rs` shape; IronClaw's `StoreData`
+    pattern combining limiter + WASI ctx into one store-data
+    type. No source borrowed.
+  - **Bench** (gitignored at
+    `bench-results/15-wasm-component-model.txt`): cold
+    construction core wasm ~17 ms vs Component Model ~860 ms
+    (~50× — the fixture is 46 KB vs a few hundred bytes of
+    WAT, plus canonical-ABI glue + WASI import resolution).
+    Warm call core ~1.13 ms vs Component ~2.52 ms (+1.4 ms,
+    +120%) — dominated by per-call
+    `wasmtime_wasi::p2::add_to_linker_sync` and canonical-ABI
+    marshalling. `InstancePre` + persistent component cache
+    are obvious future-step optimisations; both are pure
+    internal swaps that can land additively.
+  - **Step doc** —
+    [`docs/steps/16b-wasm-component-model.md`](docs/steps/16b-wasm-component-model.md).
 - **`uniclaw-tools-wasm` crate** — sandboxed Tool runtime backed by
   wasmtime (Phase 3 step 4 / step 16a). Workspace member 16. The
   third real `Tool` implementation, validating the trait surface

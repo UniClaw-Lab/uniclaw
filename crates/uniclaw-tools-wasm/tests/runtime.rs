@@ -368,6 +368,146 @@ fn approval_policy_mirrors_manifest_default() {
 // because we hold an Engine + a thread handle.
 // =====================================================================
 
+// =====================================================================
+// Component Model fixture (16b) — loads the echo-component.wasm
+// artifact built from `tests/fixtures/echo-component/`. The fixture's
+// `call(input)`:
+//   - returns `Ok(input)` when input is non-empty,
+//   - returns `Err("empty input")` when input is empty.
+// Both arms of `result<list<u8>, string>` are exercised in one fixture.
+// =====================================================================
+
+const ECHO_COMPONENT: &[u8] = include_bytes!("fixtures/echo-component.wasm");
+
+#[test]
+fn component_echo_returns_input_verbatim_via_canonical_abi() {
+    let tool = WasmTool::from_component_bytes(
+        ECHO_COMPONENT,
+        test_manifest("echo-component"),
+        WasmConfig::default(),
+    )
+    .expect("component compiles");
+
+    let input = b"hello, component model";
+    let out = tool.call(&make_call(input)).expect("ok");
+    assert_eq!(out.bytes, input);
+
+    // BLAKE3 of the bytes — same convention as core wasm.
+    let expected = Digest(*blake3::hash(input).as_bytes());
+    assert_eq!(out.output_hash, expected);
+    assert!(out.metadata.secrets_used.is_empty());
+}
+
+#[test]
+fn component_guest_error_arm_surfaces_as_failed() {
+    // The fixture returns `Err("empty input")` for empty input.
+    // We must surface that as `ToolError::Failed` with the message
+    // preserved — the guest error is *logical*, not a sandbox
+    // violation, so it's not Timeout and not a fuel/memory bound.
+    let tool = WasmTool::from_component_bytes(
+        ECHO_COMPONENT,
+        test_manifest("echo-component"),
+        WasmConfig::default(),
+    )
+    .unwrap();
+    let err = tool.call(&make_call(b"")).expect_err("guest must reject");
+    match err {
+        ToolError::Failed(msg) => {
+            assert!(
+                msg.contains("empty input"),
+                "expected guest's error message in output, got: {msg}",
+            );
+            assert!(
+                msg.contains("guest:"),
+                "expected the 'guest:' prefix that distinguishes \
+                 logical errors from sandbox traps, got: {msg}",
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+#[test]
+fn component_call_handles_4kib_input() {
+    // Larger input exercises the canonical-ABI memory transfer.
+    let tool = WasmTool::from_component_bytes(
+        ECHO_COMPONENT,
+        test_manifest("echo-component"),
+        WasmConfig::default(),
+    )
+    .unwrap();
+    let input: Vec<u8> = (0..=255).cycle().take(4 * 1024).collect();
+    let out = tool.call(&make_call(&input)).expect("ok");
+    assert_eq!(out.bytes, input);
+}
+
+#[test]
+fn component_multiple_calls_have_independent_state() {
+    let tool = WasmTool::from_component_bytes(
+        ECHO_COMPONENT,
+        test_manifest("echo-component"),
+        WasmConfig::default(),
+    )
+    .unwrap();
+    let a = tool.call(&make_call(b"first")).unwrap();
+    let b = tool.call(&make_call(b"second")).unwrap();
+    assert_eq!(a.bytes, b"first");
+    assert_eq!(b.bytes, b"second");
+}
+
+#[test]
+fn component_with_zero_fuel_traps_with_failed() {
+    // 16a's resource bounds inherit unchanged for Component Model:
+    // fuel exhaustion still maps to Failed("fuel exhausted").
+    // We use 0 fuel — the very first instruction the canonical ABI
+    // executes will trip the bound.
+    let cfg = WasmConfig {
+        fuel: 0,
+        ..WasmConfig::default()
+    };
+    let tool = WasmTool::from_component_bytes(ECHO_COMPONENT, test_manifest("echo-component"), cfg)
+        .unwrap();
+    let err = tool.call(&make_call(b"x")).expect_err("must trap");
+    match err {
+        ToolError::Failed(msg) => assert!(
+            msg.contains("fuel"),
+            "expected fuel-exhaustion message, got: {msg}",
+        ),
+        other => panic!("expected Failed(fuel...), got {other:?}"),
+    }
+}
+
+#[test]
+fn component_invalid_bytes_fail_at_construction() {
+    let err = WasmTool::from_component_bytes(
+        b"not a wasm component",
+        test_manifest("bad"),
+        WasmConfig::default(),
+    )
+    .expect_err("must reject");
+    assert!(matches!(err, BuildError::InvalidWasm(_)));
+}
+
+#[test]
+fn core_wasm_bytes_rejected_by_from_component_bytes() {
+    // A core wasm module is NOT a Component. wasmtime's
+    // `Component::new` rejects it. We verify the error path
+    // is BuildError::InvalidWasm rather than a runtime crash.
+    let core_bytes = wat::parse_str(ECHO).unwrap();
+    let err = WasmTool::from_component_bytes(
+        &core_bytes,
+        test_manifest("core-as-component"),
+        WasmConfig::default(),
+    )
+    .expect_err("must reject");
+    assert!(matches!(err, BuildError::InvalidWasm(_)));
+}
+
+// =====================================================================
+// Tool: Send + Sync — required by the trait surface, important here
+// because we hold an Engine + a thread handle.
+// =====================================================================
+
 #[test]
 fn wasm_tool_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}

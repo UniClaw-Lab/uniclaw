@@ -1,0 +1,53 @@
+// Uniclaw WASM Tool surface — Component Model edition.
+//
+// Phase 3 step 16b. Defines the contract a Component-Model tool
+// must satisfy to be loaded by `WasmTool::from_component_bytes`.
+//
+// v0 surface is deliberately small:
+//
+//   - Tools EXPORT a single function `call: (input) -> result`.
+//   - Tools IMPORT nothing in 16b. Step 16c will add capability-
+//     mediated host imports (HTTP fetch through `Capability::is_granted_by`,
+//     secret-existence checks routed through `SecretBroker`, etc.) by
+//     introducing a `host` interface and a `tool-with-host` world.
+//
+// The raw-bytes shape mirrors the host-side `ToolCall.input: Vec<u8>`
+// + `ToolOutput.bytes: Vec<u8>` already in `uniclaw-tools`. Tools
+// that want JSON shape encode it themselves; we don't bake an
+// envelope into the ABI.
+//
+// Adopt-don't-copy:
+//   - IronClaw's `near:agent@0.3.0` package (`ironclaw/wit/tool.wit`)
+//     uses a richer `record request { params, context }` /
+//     `record response { output, error }` shape with JSON strings,
+//     plus exported `schema()` and `description()`. Uniclaw's v0
+//     surface is leaner because schema/description live on the
+//     host-side `ToolManifest`, and JSON encoding is the tool's
+//     choice rather than a wire-level requirement. The richer
+//     pattern is on the future-step list when a use case demands
+//     structured payloads.
+//   - No source borrowed.
+
+package uniclaw:tool@0.1.0;
+
+interface tool-api {
+    /// Execute the tool with raw input bytes; return raw output
+    /// bytes on success, or a free-form error string on a
+    /// guest-detected error.
+    ///
+    /// Engine errors (fuel exhaustion, epoch deadline reached,
+    /// memory cap) trap the guest before this function returns;
+    /// the host catches the trap and surfaces the appropriate
+    /// `ToolError` variant. Guest-internal errors (parse failure,
+    /// invariant violation, etc.) should be returned via the
+    /// `err` arm so the caller can distinguish them from sandbox
+    /// failures.
+    call: func(input: list<u8>) -> result<list<u8>, string>;
+}
+
+/// World for tools that don't import any host capabilities.
+/// Used by 16b. Step 16c will add a `tool-with-host` world that
+/// imports a `host` interface for capability-mediated I/O.
+world tool {
+    export tool-api;
+}
