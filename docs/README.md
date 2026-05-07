@@ -38,6 +38,7 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 | 13 | Tool Execution Foundation | Phase 3 | [steps/13-tool-foundation.md](steps/13-tool-foundation.md) |
 | 14 | Native HTTP Fetch Tool with Capability Enforcement | Phase 3 | [steps/14-http-fetch-tool.md](steps/14-http-fetch-tool.md) |
 | 15 | Secret Broker | Phase 3 | [steps/15-secret-broker.md](steps/15-secret-broker.md) |
+| 16a | WASM Tool Runtime skeleton | Phase 3 | [steps/16-wasm-tool-runtime-skeleton.md](steps/16-wasm-tool-runtime-skeleton.md) |
 
 > **Note:** Phase 0 (the receipt format) is foundational and ships before Phase 1 step 1, so it's labeled "Step 0" in this index. Phase 1 has 8 numbered steps. Phase 2 has 4 numbered steps (9-12). Phase 3 begins at step 13.
 

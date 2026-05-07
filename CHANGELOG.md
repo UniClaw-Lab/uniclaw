@@ -12,6 +12,74 @@ format change history.
 
 ### Added
 
+- **`uniclaw-tools-wasm` crate** — sandboxed Tool runtime backed by
+  wasmtime (Phase 3 step 4 / step 16a). Workspace member 16. The
+  third real `Tool` implementation, validating the trait surface
+  (and `ToolError::Timeout` in particular) against arbitrary
+  guest code. Step 16 is split into three PRs (16a/16b/16c)
+  because wasmtime is a heavy dep and the Component Model has
+  rough edges; landing the runtime first means later failures
+  localise cleanly.
+  - `WasmTool::from_wat(wat, manifest, config)` and
+    `WasmTool::from_module_bytes(bytes, manifest, config)`
+    constructors. Both compile a wasmtime `Module`, validate
+    that the v0 ABI exports (`memory`, `alloc(i32)->i32`,
+    `call(i32,i32)->i64`) are present, set up the engine with
+    `consume_fuel(true)` and `epoch_interruption(true)`, and
+    spawn a per-tool ticker thread that drives the wall-clock
+    deadline.
+  - `WasmConfig { fuel, max_memory_bytes, timeout, epoch_tick }`
+    with sensible defaults (100 M fuel, 16 MiB memory, 5 s
+    timeout, 100 ms tick). Each call gets a fresh `Store` with
+    these limits applied — no state leaks between calls.
+  - **Three independent resource bounds** enforced per call:
+    fuel (CPU; `wasmtime::Trap::OutOfFuel` → `ToolError::Failed("fuel exhausted")`),
+    memory (`ResourceLimiter::memory_growing` refuses growth
+    past the cap), and wall-clock (`Trap::Interrupt` from the
+    epoch deadline → `ToolError::Timeout`). All three fire
+    independently; the first one tripped wins. `ToolError::Timeout`
+    finally has its first real producer.
+  - **No host imports in 16a.** The guest is pure compute (no
+    I/O, no clock, no randomness). 16c will add capability-mediated
+    syscalls + secret broker bridges; the trait surface for
+    those gates already exists from steps 13/14/15.
+  - **No Component Model in 16a.** 16b layers
+    `wasmtime::component::bindgen!` on top with a real Rust→WASM
+    Component fixture. Validating the runtime against core wasm
+    first means failures during 16b localise to the bindgen
+    layer, not the runtime.
+  - 14 integration tests authored as inline WAT fixtures
+    (compiled at test time via `wat::parse_str`): echo happy
+    path (3 sizes), fuel exhaustion, unreachable trap, memory
+    growth refused (cap fires), memory growth allowed (cap
+    high enough), epoch deadline → Timeout, missing-export
+    construction errors (memory and call), invalid WAT
+    construction error, multiple-call independence, approval
+    policy mirroring, Send+Sync compile-time check. Plus 6
+    unit tests covering config defaults / epoch deadline math
+    / error display.
+  - **Adopt-don't-copy citations** in `src/lib.rs`:
+    `IronClaw`'s wasmtime + WIT Component Model substrate
+    (architecture-level reference for the whole step 16
+    series; 16a borrows the three-bound resource-limiter
+    pattern). The wasmtime safe API is used directly; no
+    `unsafe` (workspace lint forbids it).
+  - **Bench** (gitignored at
+    `bench-results/14-wasm-tool-runtime-skeleton.txt`):
+    cold construction ~64 ms (mostly cranelift codegen),
+    warm `WasmTool::call` ~770 µs for tiny inputs (mostly
+    `Linker::instantiate` per-call cost — the price of the
+    fresh-sandbox guarantee). 4 KiB input adds ~1.1 ms for
+    the host↔guest memory shuffle. `InstancePre` is the
+    obvious future optimisation but premature before host
+    imports settle.
+  - **Step doc** —
+    [`docs/steps/16-wasm-tool-runtime-skeleton.md`](docs/steps/16-wasm-tool-runtime-skeleton.md)
+    walks through the design choices, the v0 guest ABI, the
+    resource-bound triad, the explicit deferrals (host imports,
+    Component Model, persistent compile cache, async, multi-tenant
+    accounting), and the rationale for splitting step 16 into
+    three PRs.
 - **`uniclaw-secrets` crate** — typed surface for credential injection
   (Phase 3 step 3 / step 15). Workspace member 15.
   - `SecretValue` — drop-zeroizing buffer (via the `zeroize` crate),
