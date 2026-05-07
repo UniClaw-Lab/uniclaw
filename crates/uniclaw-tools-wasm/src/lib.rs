@@ -97,6 +97,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bindings;
 mod config;
 mod error;
 mod limits;

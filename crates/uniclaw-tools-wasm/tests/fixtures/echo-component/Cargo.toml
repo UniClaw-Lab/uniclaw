@@ -1,0 +1,41 @@
+[package]
+name = "echo-component"
+description = "Test fixture for Uniclaw step 16b — a Rust→WASM Component that implements `uniclaw:tool/tool-api.call` as an echo. NOT a workspace member; built ahead of time via `cargo component build --release`."
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+# This crate is intentionally OUTSIDE the workspace (the workspace
+# Cargo.toml does not list it as a member, and this lib disables
+# the workspace inheritance via `[workspace]`). Reason:
+# `cargo component` builds with the wasm32-wasip2 target plus a
+# different profile, and we don't want that pulling in the host
+# workspace's dep graph or its lints.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Version pinned to match what `cargo-component` 0.21's generated
+# bindings reference (the `wit_bindgen_rt` runtime path was renamed
+# in newer wit-bindgen versions).
+wit-bindgen = "0.41"
+wit-bindgen-rt = { version = "0.41", features = ["bitflags"] }
+
+# cargo-component's metadata: tells the build tool which WIT package
+# to bind against and which world the component implements.
+[package.metadata.component]
+package = "uniclaw:tool"
+
+[package.metadata.component.target]
+path = "wit"
+world = "tool"
+
+# Size discipline for the produced .wasm — the fixture is committed
+# to the repo, so smaller is friendlier to git history.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

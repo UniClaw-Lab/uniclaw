@@ -70,15 +70,21 @@ base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
 # WebAssembly runtime — used only by uniclaw-tools-wasm.
 # `wasmtime` is the reference AOT-compiling WASM runtime with stable
-# Component Model support (we use core wasm in this step; 16b will
-# layer Component Model on top). Default features include the
-# Cranelift compiler, the JIT runtime, and component-model bindings —
-# all of which we want, so no trimming for now. The dep tree is
-# substantial; treat it as the price of admission for any production
-# WASM runtime.
-# `wat` is a dev-only tool that compiles the human-readable WebAssembly
-# Text format to wasm bytes — used by tests so fixtures stay readable.
+# Component Model support. Default features include the Cranelift
+# compiler, the JIT runtime, and component-model bindings — all of
+# which we want, so no trimming for now.
+# `wasmtime-wasi` provides host-side stubs for the WASI imports that
+# any non-`no_std` Rust→WASM Component picks up automatically (the
+# Rust standard library declares `wasi:cli/environment` and friends
+# whether the program touches them or not). 16b's Component fixture
+# never *uses* WASI — but it has to *import* it for std to link, and
+# without a registered impl wasmtime refuses to instantiate. We add
+# `add_to_linker_sync` once on each Component-Model call's linker to
+# satisfy the import shape; nothing reaches a real WASI syscall in 16b.
+# `wat` is dev-only — compiles the human-readable WebAssembly Text
+# format to wasm bytes — used by tests so fixtures stay readable.
 wasmtime = "44"
+wasmtime-wasi = "44"
 wat = "1"
 
 # Internal members.

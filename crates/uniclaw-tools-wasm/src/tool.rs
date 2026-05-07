@@ -1,10 +1,12 @@
 //! [`WasmTool`] — the public façade.
 //!
-//! Wraps a compiled [`wasmtime::Module`] plus a shared [`Engine`]
-//! and applies per-call resource limits via [`crate::limits::MemoryLimiter`]
-//! and [`wasmtime::Store`]'s fuel + epoch deadline machinery.
-//!
-//! See the crate-level docs for the v0 guest ABI.
+//! Wraps either a core [`wasmtime::Module`] (for the v0 packed-i64
+//! ABI from step 16a) or a [`wasmtime::component::Component`] (for
+//! the typed Component Model surface added in step 16b). Both share
+//! the same engine config, the same per-call resource limits, and
+//! the same `Tool` trait implementation. Internal dispatch picks
+//! the right call path based on the `WasmKind` the constructor
+//! recorded.
 
 use std::sync::{
     Arc,
@@ -13,6 +15,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+use wasmtime::component::{Component, Linker as ComponentLinker};
 use wasmtime::{Engine, Linker, Module, Store, Trap};
 
 use uniclaw_receipt::Digest;
@@ -20,56 +23,80 @@ use uniclaw_tools::{
     ApprovalPolicy, Tool, ToolCall, ToolError, ToolManifest, ToolMetadata, ToolOutput,
 };
 
+use crate::bindings;
 use crate::config::WasmConfig;
 use crate::error::BuildError;
-use crate::limits::MemoryLimiter;
+use crate::limits::StoreData;
+
+/// What kind of wasm artifact a [`WasmTool`] is wrapping.
+///
+/// Tools constructed via [`WasmTool::from_wat`] or
+/// [`WasmTool::from_module_bytes`] use [`WasmKind::Core`] and the
+/// v0 packed-i64 ABI from 16a. Tools constructed via
+/// [`WasmTool::from_component_bytes`] use [`WasmKind::Component`]
+/// and the typed Component Model surface from 16b
+/// (`uniclaw:tool/tool-api.call(list<u8>) -> result<list<u8>, string>`).
+///
+/// The two kinds use different wasmtime types, different Linkers,
+/// and different calling conventions, so they're modeled as
+/// separate variants rather than dynamically dispatched.
+enum WasmKind {
+    Core(Module),
+    Component(Component),
+}
 
 /// A [`Tool`] backed by a sandboxed WebAssembly module.
 ///
-/// Construct via [`WasmTool::from_wat`] (text form, used by tests
-/// and small fixtures) or [`WasmTool::from_module_bytes`] (binary,
-/// used in production).
+/// Three constructors:
+///
+/// - [`WasmTool::from_wat`] — text form, used by tests and small
+///   fixtures. Produces a [`WasmKind::Core`] tool using the 16a ABI.
+/// - [`WasmTool::from_module_bytes`] — core wasm bytes. Same ABI.
+/// - [`WasmTool::from_component_bytes`] — Component Model bytes
+///   conforming to `wit/tool.wit`. Uses the typed
+///   `tool-api.call(list<u8>) -> result<list<u8>, string>` surface.
 ///
 /// Each call gets a fresh [`Store`] with the configured fuel,
 /// memory limit, and epoch deadline applied. The engine and the
-/// compiled module are shared across calls; only the per-call
-/// state is fresh.
+/// compiled module/component are shared across calls; only the
+/// per-call state is fresh.
 pub struct WasmTool {
     manifest: ToolManifest,
     config: WasmConfig,
     engine: Engine,
-    module: Module,
+    kind: WasmKind,
     /// Background thread that increments the engine's epoch counter
     /// every `config.epoch_tick`. Driving `epoch_interruption` is
-    /// what makes the wall-clock timeout fire. Carried as `Arc` so
-    /// `WasmTool: Send + Sync` and so cloning the tool (a future
-    /// extension) doesn't spawn a second ticker.
+    /// what makes the wall-clock timeout fire.
     _ticker: Arc<EpochTicker>,
 }
 
 impl core::fmt::Debug for WasmTool {
-    // Custom Debug because Engine + Module don't impl Debug.
-    // The `_ticker` field is deliberately omitted — its only
-    // state is a stop-flag that's not meaningful to print.
-    // `finish_non_exhaustive` signals the omission to the reader.
+    // Custom Debug because Engine + Module + Component don't impl Debug.
+    // The `_ticker` field is deliberately omitted — its only state is a
+    // stop-flag that's not meaningful to print.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let kind_label = match &self.kind {
+            WasmKind::Core(_) => "core",
+            WasmKind::Component(_) => "component",
+        };
         f.debug_struct("WasmTool")
             .field("manifest", &self.manifest)
             .field("config", &self.config)
             .field("engine", &"<wasmtime::Engine>")
-            .field("module", &"<wasmtime::Module>")
+            .field("kind", &kind_label)
             .finish_non_exhaustive()
     }
 }
 
 impl WasmTool {
-    /// Compile a tool from WebAssembly text.
+    /// Compile a tool from WebAssembly text (core wasm only).
     ///
     /// # Errors
-    /// Returns [`BuildError::InvalidWat`] if the text fails to
-    /// parse, [`BuildError::InvalidWasm`] if the resulting binary
-    /// fails wasmtime validation, [`BuildError::EngineSetup`] if
-    /// engine construction fails on this platform.
+    /// Returns [`BuildError::InvalidWat`] if the text fails to parse,
+    /// [`BuildError::InvalidWasm`] if the resulting binary fails
+    /// wasmtime validation, [`BuildError::EngineSetup`] if engine
+    /// construction fails on this platform.
     pub fn from_wat(
         wat: &str,
         manifest: ToolManifest,
@@ -79,7 +106,7 @@ impl WasmTool {
         Self::from_module_bytes(&bytes, manifest, config)
     }
 
-    /// Compile a tool from a wasm module's binary form.
+    /// Compile a tool from a core wasm module's binary form.
     ///
     /// # Errors
     /// See [`BuildError`].
@@ -88,24 +115,13 @@ impl WasmTool {
         manifest: ToolManifest,
         config: WasmConfig,
     ) -> Result<Self, BuildError> {
-        // Engine config: the three runtime bounds wired in at engine
-        // level (fuel + epoch). Memory cap is enforced per-store via
-        // the ResourceLimiter, since it's also a per-call setting.
-        let mut wasm_config = wasmtime::Config::new();
-        wasm_config.consume_fuel(true);
-        wasm_config.epoch_interruption(true);
-        let engine =
-            Engine::new(&wasm_config).map_err(|e| BuildError::EngineSetup(e.to_string()))?;
+        let engine = build_engine()?;
 
         let module = Module::from_binary(&engine, bytes)
             .map_err(|e| BuildError::InvalidWasm(e.to_string()))?;
 
-        // Validate the v0 ABI by name. Signature checks happen at
-        // call time when wasmtime resolves the typed export — that's
-        // where the most accurate error message comes from. Here we
-        // only catch obvious "no such export" cases up-front so a
-        // misshaped module fails at construction, not on first call.
-        Self::check_required_exports(&module)?;
+        // Validate the v0 core-wasm ABI by name.
+        Self::check_required_core_exports(&module)?;
 
         let ticker = Arc::new(EpochTicker::start(&engine, config.epoch_tick));
 
@@ -113,12 +129,48 @@ impl WasmTool {
             manifest,
             config,
             engine,
-            module,
+            kind: WasmKind::Core(module),
             _ticker: ticker,
         })
     }
 
-    fn check_required_exports(module: &Module) -> Result<(), BuildError> {
+    /// Compile a tool from Component Model bytes conforming to
+    /// `wit/tool.wit`. The component's `tool-api.call` export is
+    /// driven by [`Tool::call`] on each invocation.
+    ///
+    /// # Errors
+    /// [`BuildError::InvalidWasm`] if the bytes fail to parse as a
+    /// valid Component, [`BuildError::EngineSetup`] if engine
+    /// construction fails.
+    ///
+    /// Mismatched-world errors (component exports the wrong
+    /// interface) currently surface at first call rather than at
+    /// construction; wasmtime's `Component::new` accepts any
+    /// valid Component bytes regardless of which world they
+    /// implement, and the type check happens during
+    /// [`bindings::Tool::instantiate`].
+    pub fn from_component_bytes(
+        bytes: &[u8],
+        manifest: ToolManifest,
+        config: WasmConfig,
+    ) -> Result<Self, BuildError> {
+        let engine = build_engine()?;
+
+        let component =
+            Component::new(&engine, bytes).map_err(|e| BuildError::InvalidWasm(e.to_string()))?;
+
+        let ticker = Arc::new(EpochTicker::start(&engine, config.epoch_tick));
+
+        Ok(Self {
+            manifest,
+            config,
+            engine,
+            kind: WasmKind::Component(component),
+            _ticker: ticker,
+        })
+    }
+
+    fn check_required_core_exports(module: &Module) -> Result<(), BuildError> {
         let mut have_memory = false;
         let mut have_alloc = false;
         let mut have_call = false;
@@ -157,6 +209,21 @@ impl WasmTool {
     }
 }
 
+/// Build the engine config used by every [`WasmTool`]. Three
+/// runtime bounds wired in at engine level: fuel, epoch, Component
+/// Model on. Memory cap is enforced per-store (different per call)
+/// via [`MemoryLimiter`].
+fn build_engine() -> Result<Engine, BuildError> {
+    let mut wasm_config = wasmtime::Config::new();
+    wasm_config.consume_fuel(true);
+    wasm_config.epoch_interruption(true);
+    // Component Model has been on by default in wasmtime ≥ 25, but
+    // we set it explicitly so a future default change can't silently
+    // disable our Component path.
+    wasm_config.wasm_component_model(true);
+    Engine::new(&wasm_config).map_err(|e| BuildError::EngineSetup(e.to_string()))
+}
+
 impl Tool for WasmTool {
     fn name(&self) -> &str {
         &self.manifest.name
@@ -167,26 +234,43 @@ impl Tool for WasmTool {
     }
 
     fn call(&self, tool_call: &ToolCall) -> Result<ToolOutput, ToolError> {
-        // Per-call store with the resource limits applied. Each call
-        // gets a fresh memory + fresh fuel + fresh epoch deadline —
-        // no state leaks between calls.
-        let limiter = MemoryLimiter {
-            max_memory_bytes: self.config.max_memory_bytes,
-        };
-        let mut store = Store::new(&self.engine, limiter);
+        match &self.kind {
+            WasmKind::Core(module) => self.call_core(module, tool_call),
+            WasmKind::Component(component) => self.call_component(component, tool_call),
+        }
+    }
+
+    fn approval_policy(&self, _call: &ToolCall) -> ApprovalPolicy {
+        self.manifest.default_approval
+    }
+}
+
+impl WasmTool {
+    /// Per-call store factory. Builds a fresh [`StoreData`] (memory
+    /// cap + empty WASI context) and applies the fuel + epoch
+    /// deadline. Used by both `call_core` and `call_component`.
+    fn fresh_store(&self) -> Result<Store<StoreData>, ToolError> {
+        let mut store = Store::new(&self.engine, StoreData::new(self.config.max_memory_bytes));
         store.limiter(|s| s);
         store
             .set_fuel(self.config.fuel)
             .map_err(|e| ToolError::Failed(format!("set_fuel: {e}")))?;
         store.set_epoch_deadline(self.config.epoch_deadline());
+        Ok(store)
+    }
 
-        // No host imports in v0 — empty linker. Step 16c will
-        // populate this with capability-checked syscalls + secret
-        // broker bridges.
+    /// 16a core-wasm call path. Allocates input via the guest's
+    /// `alloc`, writes input bytes, calls `call`, unpacks the
+    /// returned i64, reads output bytes back.
+    fn call_core(&self, module: &Module, tool_call: &ToolCall) -> Result<ToolOutput, ToolError> {
+        let mut store = self.fresh_store()?;
+
+        // No host imports in v0 — empty linker. Step 16c will populate
+        // this with capability-checked syscalls + secret broker bridges.
         let linker = Linker::new(&self.engine);
 
         let instance = linker
-            .instantiate(&mut store, &self.module)
+            .instantiate(&mut store, module)
             .map_err(|e| map_wasm_error(&e))?;
 
         let memory = instance
@@ -207,9 +291,6 @@ impl Tool for WasmTool {
                 ))
             })?;
 
-        // Convert the input length to i32. Inputs > 2 GiB can't be
-        // expressed in the guest's pointer type anyway; this is a
-        // hard limit independent of `max_memory_bytes`.
         let input_len = i32::try_from(tool_call.input.len()).map_err(|_| {
             ToolError::Failed(format!(
                 "input length {} exceeds i32::MAX (wasm32 limit)",
@@ -217,7 +298,6 @@ impl Tool for WasmTool {
             ))
         })?;
 
-        // Ask the guest to allocate space, write the input, run.
         let input_ptr = alloc
             .call(&mut store, input_len)
             .map_err(|e| map_wasm_error(&e))?;
@@ -238,9 +318,9 @@ impl Tool for WasmTool {
             .call(&mut store, (input_ptr, input_len))
             .map_err(|e| map_wasm_error(&e))?;
 
-        // Unpack high 32 = ptr, low 32 = len.
-        // Cast through u64 to keep the bit pattern; sign-extension
-        // would corrupt high bytes for valid 31-bit pointers.
+        // Unpack high 32 = ptr, low 32 = len. Cast through u64 to
+        // keep the bit pattern; sign-extension would corrupt high
+        // bytes for valid 31-bit pointers.
         #[allow(clippy::cast_sign_loss)]
         let packed_u = packed as u64;
         let out_ptr_u32 = (packed_u >> 32) as u32;
@@ -274,24 +354,63 @@ impl Tool for WasmTool {
         })
     }
 
-    fn approval_policy(&self, _call: &ToolCall) -> ApprovalPolicy {
-        self.manifest.default_approval
+    /// 16b Component Model call path. Drives the bindgen-generated
+    /// `tool-api.call(list<u8>) -> result<list<u8>, string>` surface.
+    /// The canonical ABI handles host↔guest memory transfer for us;
+    /// no `alloc` / `memory` / packed-i64 plumbing needed.
+    fn call_component(
+        &self,
+        component: &Component,
+        tool_call: &ToolCall,
+    ) -> Result<ToolOutput, ToolError> {
+        let mut store = self.fresh_store()?;
+
+        // Linker stub: the v0 `tool` world imports nothing of OURS,
+        // but a Rust→WASM Component built against `wasm32-wasip2`
+        // automatically picks up WASI imports from std (whether the
+        // program touches them or not). We add WASI's empty linker
+        // shim so the imports exist — guests still can't reach any
+        // real syscall in 16b because we never construct a WASI
+        // context with permissions. Step 16c will replace this with
+        // capability-checked Uniclaw-specific imports.
+        let mut linker = ComponentLinker::<StoreData>::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(|e| ToolError::Failed(format!("add WASI to linker: {e}")))?;
+
+        let instance = bindings::Tool::instantiate(&mut store, component, &linker)
+            .map_err(|e| map_wasm_error(&e))?;
+
+        let result = instance
+            .uniclaw_tool_tool_api()
+            .call_call(&mut store, &tool_call.input)
+            .map_err(|e| map_wasm_error(&e))?;
+
+        // The Component Model `result<list<u8>, string>` becomes a
+        // Rust `Result<Vec<u8>, String>`. The Err arm is a guest-
+        // chosen error message — surface it as `ToolError::Failed`
+        // with the message preserved (callers may pattern-match on it).
+        let bytes = result.map_err(|msg| ToolError::Failed(format!("guest: {msg}")))?;
+
+        let output_hash = Digest(*blake3::hash(&bytes).as_bytes());
+        Ok(ToolOutput {
+            bytes,
+            output_hash,
+            metadata: ToolMetadata::default(),
+        })
     }
 }
 
 /// Translate a wasmtime error into [`ToolError`].
 ///
-/// The two we care to distinguish:
 /// - [`Trap::OutOfFuel`] → `Failed("fuel exhausted")`. Deterministic
 ///   CPU bound fired.
 /// - [`Trap::Interrupt`] → `Timeout`. Wall-clock bound fired (epoch
-///   deadline reached). Maps to [`ToolError::Timeout`] because that's
-///   exactly what it is — the trait surface from step 13.
-///
-/// Anything else (memory out-of-bounds, unreachable, division by
-/// zero, bad indirect call, etc.) → `Failed("wasm trap: <variant>")`.
-/// Non-trap errors (engine internals, instantiation failures) →
-/// `Failed("wasm: <message>")`.
+///   deadline reached). Maps to [`ToolError::Timeout`] because
+///   that's exactly what it is — the trait surface from step 13.
+/// - Other traps (memory OOB, unreachable, division by zero, etc.)
+///   → `Failed("wasm trap: <variant>")`.
+/// - Non-trap errors (engine internals, instantiation failures) →
+///   `Failed("wasm: <message>")`.
 fn map_wasm_error(err: &wasmtime::Error) -> ToolError {
     if let Some(trap) = err.downcast_ref::<Trap>() {
         match trap {
@@ -304,17 +423,9 @@ fn map_wasm_error(err: &wasmtime::Error) -> ToolError {
     }
 }
 
-/// Background thread that drives [`Engine::increment_epoch`].
-///
-/// Owning a `Engine` (cheap clone — internal Arc) inside the thread
-/// keeps it alive at least until the thread exits. The `stop`
-/// flag is the way the parent tells the thread to terminate; the
-/// thread also exits if its sleep wakes up to `stop=true`.
-///
-/// Thread is detached (no `join` on Drop) — joining would block
-/// the dropping thread for up to one tick. Since the thread holds
-/// no resources beyond a clone of the Engine and a reference to
-/// `stop`, leaking it for a tick is harmless.
+/// Background thread that drives [`Engine::increment_epoch`]. See
+/// 16a for the rationale (per-tool, detached, exits via stop-flag
+/// poll on next sleep wake-up).
 struct EpochTicker {
     stop: Arc<AtomicBool>,
 }
@@ -325,16 +436,10 @@ impl EpochTicker {
         let stop_for_thread = Arc::clone(&stop);
         let engine_clone = engine.clone();
         thread::spawn(move || {
-            // Loop until told to stop. Sleep granularity = tick.
-            // We don't try to do high-precision timing; epoch
-            // interruption only needs "fires within roughly one
-            // tick of the deadline."
             while !stop_for_thread.load(Ordering::Acquire) {
                 thread::sleep(tick);
                 engine_clone.increment_epoch();
             }
-            // engine_clone drops here, releasing this thread's
-            // contribution to the engine's refcount.
         });
         Self { stop }
     }
@@ -348,16 +453,10 @@ impl Drop for EpochTicker {
 
 #[cfg(test)]
 mod tests {
-    // Most behavior is exercised in tests/runtime.rs (integration
-    // tests with .wat fixtures). The unit tests here only cover
-    // helpers that don't need a compiled module.
     use super::*;
 
     #[test]
     fn map_wasm_error_translates_traps() {
-        // We can't easily fabricate every Trap variant from outside
-        // wasmtime, so we just check the catch-all path doesn't
-        // panic and produces something useful.
         let e = wasmtime::Error::msg("boom");
         let translated = map_wasm_error(&e);
         match translated {
