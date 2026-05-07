@@ -375,9 +375,18 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
         // Provenance edges:
         // - Always one edge linking back to the Allowed proposal receipt.
         // - On success: one edge each for the tool input hash and the
-        //   tool output hash (so audit readers can query either).
+        //   tool output hash (so audit readers can query either), plus
+        //   one `secret_used` edge per secret reference the tool
+        //   consumed (the *reference name* — never the value).
         // - On failure: one edge with the error variant + message.
-        let mut provenance: Vec<ProvenanceEdge> = Vec::with_capacity(3);
+        //
+        // Capacity: 3 base edges + one per used secret. Most tool calls
+        // use 0 or 1 secrets so this rarely re-allocates.
+        let secrets_count = match &e.result {
+            Ok(o) => o.metadata.secrets_used.len(),
+            Err(_) => 0,
+        };
+        let mut provenance: Vec<ProvenanceEdge> = Vec::with_capacity(3 + secrets_count);
         provenance.push(ProvenanceEdge {
             from: format!("receipt:{allowed_id_hex}"),
             to: format!("tool:{tool_name}"),
@@ -398,6 +407,19 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
                     to: format!("output:{out_hex}"),
                     kind: "tool_output".into(),
                 });
+                // One edge per secret reference name. The name is what
+                // the tool was *configured* with (e.g. "github.token");
+                // the value is never anywhere in the receipt chain.
+                // This is the audit signal for "this run touched a
+                // privileged credential" — verifiers and SBOM-style
+                // tooling key off `kind = "secret_used"`.
+                for secret_ref in &output.metadata.secrets_used {
+                    provenance.push(ProvenanceEdge {
+                        from: format!("receipt:{allowed_id_hex}"),
+                        to: format!("secret:{secret_ref}"),
+                        kind: "secret_used".into(),
+                    });
+                }
                 (
                     OutcomeKind::ToolExecutedAllowed {
                         input_hash: e.allowed_receipt.body.action.input_hash,

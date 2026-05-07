@@ -15,7 +15,8 @@ categories.workspace = true
 [dependencies]
 uniclaw-receipt.workspace = true
 uniclaw-tools.workspace = true
-serde = { workspace = true, features = ["derive"] }
+uniclaw-secrets.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
 serde_json.workspace = true
 ureq.workspace = true
 url.workspace = true

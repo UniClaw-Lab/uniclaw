@@ -113,4 +113,4 @@ mod tool;
 pub use capability::{Capability, GlobPattern};
 pub use host::ToolHost;
 pub use noop::NoopTool;
-pub use tool::{ApprovalPolicy, Tool, ToolCall, ToolError, ToolManifest, ToolOutput};
+pub use tool::{ApprovalPolicy, Tool, ToolCall, ToolError, ToolManifest, ToolMetadata, ToolOutput};

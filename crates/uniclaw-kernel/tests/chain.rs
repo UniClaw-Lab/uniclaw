@@ -17,8 +17,8 @@ use uniclaw_kernel::{
     Approval, ApprovalPolicy, ApprovalRejection, Capability, Cleanable, CleanerPass, CleanupError,
     CleanupReport, Clock, DeepSleepReport, GlobPattern, Kernel, KernelError, KernelEvent,
     LightSleepReport, NoopTool, OutcomeKind, Proposal, ReceiptLogWalker, Signer, Tool, ToolCall,
-    ToolError, ToolExecution, ToolExecutionRejection, ToolHost, ToolManifest, ToolOutput, Walkable,
-    run_deep_sleep, run_light_sleep,
+    ToolError, ToolExecution, ToolExecutionRejection, ToolHost, ToolManifest, ToolMetadata,
+    ToolOutput, Walkable, run_deep_sleep, run_light_sleep,
 };
 use uniclaw_receipt::{
     Action, Decision, Digest, ProvenanceEdge, Receipt, ReceiptBody, RuleRef, crypto,
@@ -46,6 +46,20 @@ impl Clock for CountingClock {
         self.0.set(n + 1);
         format!("2026-04-26T12:{:02}:{:02}Z", n / 60, n % 60)
     }
+}
+
+/// Hex-encode a 32-byte digest into a 64-char lowercase string.
+/// The kernel formats receipt-id provenance refs as
+/// `receipt:<hex32>` — tests need to recompute that to assert
+/// against minted edges. (`hex_encode_32` mirrors the kernel's
+/// internal `hex32` helper without taking a dep on it.)
+fn hex_encode_32(bytes: &[u8; 32]) -> String {
+    use core::fmt::Write;
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        write!(s, "{b:02x}").unwrap();
+    }
+    s
 }
 
 fn make_proposal(i: usize) -> Proposal {
@@ -1069,6 +1083,128 @@ fn tool_execution_success_flow_round_trips_via_noop_tool() {
 }
 
 #[test]
+fn tool_execution_emits_secret_used_provenance_edges_for_each_used_secret() {
+    // When a tool's `ToolMetadata::secrets_used` lists one or more
+    // secret reference names, the kernel must mint one `secret_used`
+    // provenance edge per name. The edge target is `secret:<ref>` —
+    // never the secret value (which the kernel has no access to and
+    // could not record even if it wanted to).
+    //
+    // This is the audit signal that lets a verifier ask "did this
+    // run touch privileged credentials?" without re-running the tool.
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let input = b"secret-using call";
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "echo", input);
+
+    // Hand-craft a ToolOutput whose metadata lists two consumed
+    // secrets. (We don't run a real tool here — the kernel handler
+    // is what we're testing.)
+    let bytes = input.to_vec();
+    let output_hash = Digest(*blake3::hash(&bytes).as_bytes());
+    let output = ToolOutput {
+        bytes,
+        output_hash,
+        metadata: ToolMetadata {
+            secrets_used: vec!["github.token".into(), "openai.key".into()],
+        },
+    };
+
+    let exec_outcome = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed.clone(),
+            original_proposal: prop,
+            result: Ok(output),
+        }))
+        .expect("kernel records execution");
+
+    // Receipt verifies under the kernel's signing key.
+    crypto::verify(&exec_outcome.receipt).expect("execution receipt signed");
+
+    // 3 base edges (tool_execution, tool_input, tool_output) + 2
+    // secret_used edges = 5.
+    let edges = &exec_outcome.receipt.body.provenance;
+    assert_eq!(
+        edges.len(),
+        5,
+        "expected 3 base + 2 secret edges, got: {edges:#?}",
+    );
+
+    let secret_edges: Vec<&_> = edges.iter().filter(|e| e.kind == "secret_used").collect();
+    assert_eq!(secret_edges.len(), 2);
+
+    // Each secret edge: from = receipt:<allowed_id>, to = secret:<ref>.
+    let allowed_id_hex = hex_encode_32(&allowed.content_id().0);
+    let expected_from = format!("receipt:{allowed_id_hex}");
+    for edge in &secret_edges {
+        assert_eq!(
+            edge.from, expected_from,
+            "edge.from must be the prior receipt"
+        );
+        assert!(
+            edge.to == "secret:github.token" || edge.to == "secret:openai.key",
+            "unexpected edge.to: {}",
+            edge.to,
+        );
+    }
+
+    // Critically: the secret VALUES are not anywhere in the receipt
+    // body or its provenance. We only check for plausible value
+    // strings since we never wrote real values into this test, but
+    // the structural property is what matters: there's no field on
+    // ProvenanceEdge that could carry a value.
+    let blob = format!("{:?}", exec_outcome.receipt.body);
+    assert!(!blob.contains("ghp_"));
+    assert!(!blob.contains("sk-"));
+}
+
+#[test]
+fn tool_execution_with_no_secrets_used_emits_only_base_edges() {
+    // Sanity check — the secrets_used list defaults empty, and a
+    // tool that uses no secrets must produce exactly the 3 base
+    // edges. Guards against accidentally minting a placeholder
+    // edge for tools that don't touch secrets.
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+    let input = b"no-secret call";
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "echo", input);
+
+    let bytes = input.to_vec();
+    let output = ToolOutput {
+        bytes: bytes.clone(),
+        output_hash: Digest(*blake3::hash(&bytes).as_bytes()),
+        metadata: ToolMetadata::default(),
+    };
+
+    let exec = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed,
+            original_proposal: prop,
+            result: Ok(output),
+        }))
+        .expect("ok");
+
+    assert_eq!(exec.receipt.body.provenance.len(), 3);
+    assert!(
+        exec.receipt
+            .body
+            .provenance
+            .iter()
+            .all(|e| e.kind != "secret_used"),
+        "no secret_used edges expected when secrets_used is empty",
+    );
+}
+
+#[test]
 fn tool_execution_failure_path_records_error_in_provenance_not_decision() {
     let key = SigningKey::from_bytes(&[7u8; 32]);
     let mut kernel = Kernel::new(
@@ -1133,6 +1269,7 @@ fn tool_execution_rejects_forged_allowed_receipt() {
             result: Ok(ToolOutput {
                 bytes: vec![],
                 output_hash: Digest([0u8; 32]),
+                metadata: ToolMetadata::default(),
             }),
         }))
         .expect_err("forged receipt rejected");
@@ -1170,6 +1307,7 @@ fn tool_execution_rejects_receipt_signed_by_different_kernel() {
             result: Ok(ToolOutput {
                 bytes: vec![],
                 output_hash: Digest([0u8; 32]),
+                metadata: ToolMetadata::default(),
             }),
         }))
         .expect_err("foreign-kernel receipt rejected");
@@ -1204,6 +1342,7 @@ fn tool_execution_rejects_receipt_whose_decision_isnt_allowed() {
             result: Ok(ToolOutput {
                 bytes: vec![],
                 output_hash: Digest([0u8; 32]),
+                metadata: ToolMetadata::default(),
             }),
         }))
         .expect_err("not-Allowed receipt rejected");
@@ -1237,6 +1376,7 @@ fn tool_execution_rejects_receipt_whose_action_isnt_a_tool_call() {
             result: Ok(ToolOutput {
                 bytes: vec![],
                 output_hash: Digest([0u8; 32]),
+                metadata: ToolMetadata::default(),
             }),
         }))
         .expect_err("non-tool action rejected");
@@ -1267,6 +1407,7 @@ fn tool_execution_rejects_when_proposal_action_doesnt_match_receipt() {
             result: Ok(ToolOutput {
                 bytes: vec![],
                 output_hash: Digest([0u8; 32]),
+                metadata: ToolMetadata::default(),
             }),
         }))
         .expect_err("action substitution rejected");

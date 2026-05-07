@@ -19,14 +19,41 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Tool input: just a URL for v0. Future fields (method, headers,
-/// body) live behind `#[serde(default)]` so older receipts stay
-/// parseable.
+/// Tool input: a URL plus optional authentication directive. Future
+/// fields (method, custom headers, body) land here behind
+/// `#[serde(default)]` so older receipts stay parseable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpFetchInput {
     /// Absolute URL to GET. Must include scheme (`http://` or
     /// `https://`).
     pub url: String,
+    /// Optional authentication directive. The tool fetches the named
+    /// secret from its [`uniclaw_secrets::SecretBroker`] at call
+    /// time and injects it into the request. **The secret value
+    /// never appears in this struct or in any receipt** — only the
+    /// reference name. Receipts record `secret_used` provenance
+    /// edges naming the *ref*, not the value.
+    ///
+    /// `None` (and missing-on-deserialize, via `#[serde(default)]`)
+    /// means an unauthenticated request.
+    #[serde(default)]
+    pub auth: Option<AuthSpec>,
+}
+
+/// How a secret should be applied to the outgoing request.
+///
+/// v0 supports a single variant; the enum is tagged so future
+/// variants (`CustomHeader`, `BasicAuth`, etc.) can land additively
+/// without breaking existing inputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AuthSpec {
+    /// Inject the secret as `Authorization: Bearer <value>`.
+    /// `secret_ref` is the broker reference name (NOT the value).
+    BearerHeader {
+        /// Broker reference, e.g. `"github.token"`.
+        secret_ref: String,
+    },
 }
 
 /// Tool output: HTTP status, response headers, body bytes (base64).
@@ -59,6 +86,7 @@ mod tests {
     fn input_round_trips_through_json() {
         let inp = HttpFetchInput {
             url: "https://example.com/".into(),
+            auth: None,
         };
         let s = serde_json::to_string(&inp).unwrap();
         let back: HttpFetchInput = serde_json::from_str(&s).unwrap();
@@ -104,5 +132,45 @@ mod tests {
         let s = r#"{"url":"https://example.com/"}"#;
         let inp: HttpFetchInput = serde_json::from_str(s).unwrap();
         assert_eq!(inp.url, "https://example.com/");
+        assert!(inp.auth.is_none(), "auth defaults to None");
+    }
+
+    #[test]
+    fn parses_input_with_bearer_auth() {
+        let s = r#"{"url":"https://api.example.com/me","auth":{"type":"bearer_header","secret_ref":"github.token"}}"#;
+        let inp: HttpFetchInput = serde_json::from_str(s).unwrap();
+        assert_eq!(inp.url, "https://api.example.com/me");
+        match inp.auth {
+            Some(AuthSpec::BearerHeader { secret_ref }) => assert_eq!(secret_ref, "github.token"),
+            other => panic!("expected BearerHeader, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_with_auth_round_trips_through_json() {
+        let inp = HttpFetchInput {
+            url: "https://api.example.com/".into(),
+            auth: Some(AuthSpec::BearerHeader {
+                secret_ref: "x.y.z".into(),
+            }),
+        };
+        let s = serde_json::to_string(&inp).unwrap();
+        let back: HttpFetchInput = serde_json::from_str(&s).unwrap();
+        assert_eq!(inp, back);
+    }
+
+    #[test]
+    fn auth_spec_uses_lowercase_tag_field() {
+        // The tag field is `type` and values are snake_case so the
+        // wire format is JS-friendly (it'll be the LLM that builds
+        // these structures via tool-calling).
+        let inp = HttpFetchInput {
+            url: "https://x/".into(),
+            auth: Some(AuthSpec::BearerHeader {
+                secret_ref: "k".into(),
+            }),
+        };
+        let s = serde_json::to_string(&inp).unwrap();
+        assert!(s.contains(r#""type":"bearer_header""#));
     }
 }

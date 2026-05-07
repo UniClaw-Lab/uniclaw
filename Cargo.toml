@@ -15,6 +15,7 @@ members = [
     "crates/uniclaw-store-sqlite",
     "crates/uniclaw-tools",
     "crates/uniclaw-tools-http",
+    "crates/uniclaw-secrets",
 ]
 
 [workspace.package]
@@ -51,6 +52,12 @@ tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 # there's no system dependency; cost is ~1 MB binary size on the host crate.
 rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
 
+# Zeroize secret bytes on drop — used by uniclaw-secrets.
+# Tiny, audited, no_std-friendly. Provides a guarantee the compiler
+# doesn't optimize the zeroing away (which it can do for plain loops
+# clearing memory that's about to be deallocated).
+zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
+
 # HTTP client + URL parsing + base64 — used only by uniclaw-tools-http.
 # `ureq` is a synchronous HTTP client (matches the sync `Tool::call` trait);
 # `rustls` keeps TLS in pure Rust. `url` parses URLs robustly (including
@@ -74,6 +81,7 @@ uniclaw-host = { path = "crates/uniclaw-host", version = "0.0.1" }
 uniclaw-store-sqlite = { path = "crates/uniclaw-store-sqlite", version = "0.0.1" }
 uniclaw-tools = { path = "crates/uniclaw-tools", version = "0.0.1" }
 uniclaw-tools-http = { path = "crates/uniclaw-tools-http", version = "0.0.1" }
+uniclaw-secrets = { path = "crates/uniclaw-secrets", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]

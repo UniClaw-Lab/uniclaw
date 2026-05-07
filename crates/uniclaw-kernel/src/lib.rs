@@ -57,5 +57,5 @@ pub use uniclaw_sleep::{
 // on `uniclaw-tools` to construct `KernelEvent::RecordToolExecution`.
 pub use uniclaw_tools::{
     ApprovalPolicy, Capability, GlobPattern, NoopTool, Tool, ToolCall, ToolError, ToolHost,
-    ToolManifest, ToolOutput,
+    ToolManifest, ToolMetadata, ToolOutput,
 };

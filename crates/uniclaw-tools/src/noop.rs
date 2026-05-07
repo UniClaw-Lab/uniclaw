@@ -6,7 +6,9 @@ use alloc::vec::Vec;
 
 use uniclaw_receipt::Digest;
 
-use crate::tool::{ApprovalPolicy, Tool, ToolCall, ToolError, ToolManifest, ToolOutput};
+use crate::tool::{
+    ApprovalPolicy, Tool, ToolCall, ToolError, ToolManifest, ToolMetadata, ToolOutput,
+};
 
 /// A tool that returns its input bytes verbatim as output.
 ///
@@ -57,7 +59,11 @@ impl Tool for NoopTool {
     fn call(&self, call: &ToolCall) -> Result<ToolOutput, ToolError> {
         let bytes = call.input.clone();
         let output_hash = Digest(*blake3::hash(&bytes).as_bytes());
-        Ok(ToolOutput { bytes, output_hash })
+        Ok(ToolOutput {
+            bytes,
+            output_hash,
+            metadata: ToolMetadata::default(),
+        })
     }
 }
 
