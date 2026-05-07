@@ -305,13 +305,30 @@ fn oversize_response_is_refused_without_returning_partial_body() {
 }
 
 // =====================================================================
-// Timeout
+// Timeout — measured by elapsed time, not by error wording
 // =====================================================================
 
 #[test]
-fn slow_response_times_out() {
-    // Server delays 2s; tool timeout is 250 ms.
-    let server = MockServer::start(|_| Response::slow(Duration::from_secs(2)));
+fn slow_response_returns_error_well_before_the_server_delay() {
+    // The server takes 4 s to respond; tool timeout is 250 ms. We
+    // check two things, both platform-agnostic:
+    //
+    //   (a) the call returns Err — any variant. We do *not* match on
+    //       error wording, because socket-timeout messages differ
+    //       across operating systems (Linux: "timed out"; Windows:
+    //       "did not properly respond after a period of time"; macOS:
+    //       "Operation timed out"). Earlier versions of this test
+    //       grep'd for "timed out" / "deadline" / "timeout" and broke
+    //       on Windows CI. Don't repeat that mistake.
+    //
+    //   (b) it returned in roughly the timeout window, well short of
+    //       the 4 s server delay, proving the timeout actually fired
+    //       (not that we got an unrelated transport failure that
+    //       just happened to surface).
+    //
+    // 1.5 s is generous slop on a loaded CI runner; the timeout is
+    // 250 ms.
+    let server = MockServer::start(|_| Response::slow(Duration::from_secs(4)));
     let tool = HttpFetchTool::with_config(
         vec![GlobPattern::new("127.0.0.1")],
         HttpFetchConfig {
@@ -320,21 +337,16 @@ fn slow_response_times_out() {
         },
     );
 
-    let err = tool
-        .call(&make_call(&server.url("/slow")))
-        .expect_err("should time out");
-    // ureq's transport error covers both connect and read timeouts;
-    // we accept either Timeout or Failed-with-timeout-like-message.
-    match err {
-        ToolError::Timeout => {}
-        ToolError::Failed(msg) => {
-            assert!(
-                msg.contains("timed out") || msg.contains("deadline") || msg.contains("timeout"),
-                "expected timeout-flavored Failed, got: {msg}"
-            );
-        }
-        other => panic!("expected Timeout/Failed-timeout, got {other:?}"),
-    }
+    let started = std::time::Instant::now();
+    let result = tool.call(&make_call(&server.url("/slow")));
+    let elapsed = started.elapsed();
+
+    assert!(result.is_err(), "expected timeout-induced error, got Ok");
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "tool waited {elapsed:?} — timeout (250 ms) did not fire well \
+         before the 4 s server delay",
+    );
 }
 
 // =====================================================================

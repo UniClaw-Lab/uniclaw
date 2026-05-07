@@ -199,17 +199,30 @@ impl Tool for HttpFetchTool {
         let response = match self.agent.get(url.as_str()).call() {
             Ok(r) | Err(ureq::Error::Status(_, r)) => r,
             Err(ureq::Error::Transport(t)) => {
+                // All transport-layer failures (DNS, connect refused,
+                // TCP read/write error, TLS handshake failure, **timeouts**)
+                // map to `ToolError::Failed` for v0.
+                //
+                // Why not surface timeouts as `ToolError::Timeout` here?
+                // Portable timeout detection in `ureq` 2.x requires
+                // inspecting an OS-dependent inner `io::Error` or
+                // string-matching the display message — and the wording
+                // varies wildly across platforms (Linux: "timed out";
+                // Windows: "did not properly respond after a period of
+                // time"; macOS: "Operation timed out"). The earlier
+                // string-match approach failed on Windows CI. The
+                // structurally clean fix needs a richer ureq API
+                // (a stable `is_timeout()` predicate or downcast path)
+                // that doesn't yet exist in 2.x.
+                //
+                // `ToolError::Timeout` stays in the trait surface — file-IO
+                // and subprocess tools that can detect timeouts cleanly
+                // will use it. `HttpFetchTool` is conservative and uses
+                // `Failed` with the message preserved so callers can
+                // still grep platform-specific timeout patterns
+                // out-of-band if they need to.
                 let kind = format!("{:?}", t.kind());
                 let msg = t.to_string();
-                // ureq doesn't have a stable "Timeout" variant on the
-                // transport error in 2.x; the kind/message contains
-                // "Io" with "deadline" / "timed out" for time-based
-                // failures. Surface as Timeout when the message looks
-                // time-related; otherwise generic Failed.
-                if msg.contains("deadline") || msg.contains("timed out") || msg.contains("timeout")
-                {
-                    return Err(ToolError::Timeout);
-                }
                 return Err(ToolError::Failed(format!("transport [{kind}]: {msg}")));
             }
         };
