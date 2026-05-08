@@ -41,6 +41,7 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 | 16a | WASM Tool Runtime skeleton | Phase 3 | [steps/16-wasm-tool-runtime-skeleton.md](steps/16-wasm-tool-runtime-skeleton.md) |
 | 16b | WASM Component Model layer | Phase 3 | [steps/16b-wasm-component-model.md](steps/16b-wasm-component-model.md) |
 | 16c | WASM Host Imports | Phase 3 | [steps/16c-wasm-host-imports.md](steps/16c-wasm-host-imports.md) |
+| 18 | Output Sanitization / Redaction Proofs | Phase 3 | [steps/18-output-sanitization.md](steps/18-output-sanitization.md) |
 
 > **Note:** Phase 0 (the receipt format) is foundational and ships before Phase 1 step 1, so it's labeled "Step 0" in this index. Phase 1 has 8 numbered steps. Phase 2 has 4 numbered steps (9-12). Phase 3 begins at step 13.
 
