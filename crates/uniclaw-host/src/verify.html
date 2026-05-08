@@ -111,6 +111,80 @@
     })[c]);
   }
 
+  // --- canonicalization ---
+  //
+  // Receipts at schema_version >= 2 use RFC 8785 JCS. This is the
+  // JS port of crates/uniclaw-receipt/src/canonical.rs. Two
+  // verifiers in different languages running JCS over the same
+  // body MUST produce identical bytes — that's what the
+  // tests/vectors/canonical-v2.json fixture exists to confirm.
+  //
+  // Scope: handles the shape Uniclaw receipts actually use
+  // (string keys, integer numbers only, ASCII-mostly strings).
+  // Floats throw rather than emit potentially wrong bytes, same
+  // as the Rust side.
+
+  function canonicalizeBody(body) {
+    if (body && typeof body === "object" && body.schema_version >= 2) {
+      return canonicalizeJcs(body);
+    }
+    // Legacy path (v1): serde_json's struct-declaration order.
+    // ES2015 insertion order on a JSON.parse'd body matches.
+    return JSON.stringify(body);
+  }
+
+  function canonicalizeJcs(value) {
+    if (value === null) return "null";
+    if (value === true) return "true";
+    if (value === false) return "false";
+    if (typeof value === "number") {
+      if (!Number.isInteger(value)) {
+        throw new Error("JCS: expected integer, got float " + value);
+      }
+      return String(value);
+    }
+    if (typeof value === "string") {
+      return canonicalizeJcsString(value);
+    }
+    if (Array.isArray(value)) {
+      return "[" + value.map(canonicalizeJcs).join(",") + "]";
+    }
+    if (typeof value === "object") {
+      // Sort keys by UTF-16 code units. JS String.prototype.localeCompare
+      // uses locale-sensitive ordering; the default `sort()` uses
+      // UTF-16 code unit comparison via abstract relational comparison
+      // — which is what JCS specifies.
+      const keys = Object.keys(value).sort();
+      return "{" + keys.map(k =>
+        canonicalizeJcsString(k) + ":" + canonicalizeJcs(value[k])
+      ).join(",") + "}";
+    }
+    throw new Error("JCS: unsupported value type " + typeof value);
+  }
+
+  function canonicalizeJcsString(s) {
+    let out = '"';
+    for (const c of s) {
+      const code = c.codePointAt(0);
+      switch (c) {
+        case '"':  out += '\\"';  break;
+        case '\\': out += '\\\\'; break;
+        case '\b': out += '\\b';  break;
+        case '\f': out += '\\f';  break;
+        case '\n': out += '\\n';  break;
+        case '\r': out += '\\r';  break;
+        case '\t': out += '\\t';  break;
+        default:
+          if (code < 0x20) {
+            out += '\\u' + code.toString(16).padStart(4, '0');
+          } else {
+            out += c;
+          }
+      }
+    }
+    return out + '"';
+  }
+
   // --- core verification ---
 
   async function ed25519Supported() {
@@ -153,15 +227,24 @@
 
     // Reconstruct the canonical body bytes the kernel signed.
     //
-    // The kernel's `crypto::sign` does `serde_json::to_vec(&body)`, which
-    // emits keys in struct-declaration order. Since ES2015, JS preserves
-    // insertion order for string-keyed properties in both `JSON.parse`
-    // (parsed-in-source-order) and `JSON.stringify` (serialized-in-property-
-    // order). For a receipt fetched from `/receipts/<hash>`, those bytes
-    // match the kernel's signed bytes exactly. If the user pasted a
-    // pretty-printed copy, this re-stringification produces the same
-    // compact form the kernel signed.
-    const bodyStr = JSON.stringify(receipt.body);
+    // The canonicalization rule depends on the body's schema_version:
+    //
+    // - schema_version <= 1: serde_json default. Keys appear in
+    //   struct-declaration order. Since ES2015 JS preserves
+    //   insertion order, JSON.stringify on a JSON.parse'd body
+    //   reproduces those bytes for any receipt fetched directly
+    //   from /receipts/<hash>.
+    //
+    // - schema_version >= 2: RFC 8785 JCS. Keys lexicographic,
+    //   numbers normalized, standard string escapes. The
+    //   canonicalizeJcs() function below is the JS port of the
+    //   Rust `uniclaw_receipt::canonical::to_vec`. Cross-language
+    //   verifiers running JCS over the same logical body MUST
+    //   produce identical bytes.
+    //
+    // Reference fixtures for conformance live at
+    // crates/uniclaw-receipt/tests/vectors/canonical-v2.json.
+    const bodyStr = canonicalizeBody(receipt.body);
     const bodyBytes = new TextEncoder().encode(bodyStr);
 
     const key = await crypto.subtle.importKey(
