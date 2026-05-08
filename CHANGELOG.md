@@ -12,6 +12,102 @@ format change history.
 
 ### Added
 
+- **Output Sanitization / Redaction Proofs** (Phase 3 step 5 /
+  step 18) — pattern-based redaction over tool outputs with
+  audit-grade receipts. The kernel's audit chain now commits
+  to the post-redaction form of every tool output (when
+  redaction was applied), records *which* rules fired with
+  structural provenance edges, and pins *which* redactor stack
+  ran via the long-placeholder `redactor_stack_hash` field.
+  **Phase 3's wedge is complete**: capability + SSRF + secrets
+  + WASM (core / Component / with-host) + redaction +
+  verifiable receipts for every action.
+  Reordered before step 17 (container fallback) because
+  output sanitization produces a new audit primitive that
+  maps directly to the war-analysis "redaction receipts"
+  claim, while step 17 adds dep weight on a non-strategic axis.
+  - **New `uniclaw-redact` crate** (workspace member 17).
+    - `Redactor` trait + `RedactionResult` (redacted bytes
+      for the caller + report for the kernel) + `id()` for
+      stable identification in audit edges.
+    - `PatternRedactor` regex-based reference impl. Compiles
+      a list of `PatternRule { id, regex, replacement }` at
+      construction; each match becomes a `[REDACTED:<rule>]`
+      placeholder. `with_defaults(id)` ships a default-rule
+      corpus covering the common credential prefixes:
+      GitHub PATs/OAuth/server/u2s/refresh, OpenAI / Anthropic
+      keys (`sk-…`, `sk-ant-…`), Slack tokens (`xoxb-…`,
+      `xoxp-…`, `xoxa-…`, `xoxr-…`), AWS access keys (`AKIA…`),
+      JWT shapes (`eyJ…`), generic `Authorization: Bearer …`
+      header echoes. 13 rules total. Operators are expected
+      to **extend, not replace** — the defaults are
+      defense-in-depth.
+    - `RedactorStack` for composition. Each redactor sees the
+      previous one's output. `stack_hash()` produces
+      `BLAKE3(stack_id + "\n" + redactor_id_1 + "\n" + …)`
+      committing to the ordered list of redactor IDs.
+    - 16 unit tests (default-rules-compile sanity,
+      pass-through clean input, replace and count, multiple
+      matches per rule, only-matching-rules-recorded,
+      rule-id-prefixed-with-redactor-id, lossy decode of
+      non-UTF-8 input, stack hash stability + variance, stack
+      composition, stack_hash uses redactor IDs not pointer
+      identity, stack `redact()` returns matching `stack_hash`).
+  - **`uniclaw-receipt` audit-data types**: `RedactionReport
+    { redacted_output_hash, matches: Vec<RuleMatch>, stack_hash }`
+    and `RuleMatch { rule_id, count }`. `no_std`-compatible
+    so the kernel can read them. The trait + impls live in
+    `uniclaw-redact` (`std`); the kernel-side audit data lives
+    in `uniclaw-receipt` (`no_std`). Same split as
+    `ToolMetadata`.
+  - **Kernel integration**: `ToolExecution.redaction:
+    Option<RedactionReport>` field. When present, the kernel:
+    - Uses `redaction.redacted_output_hash` as the receipt's
+      `output_hash` (committing to the post-redaction form,
+      not the original `output.output_hash`).
+    - Mints one `redaction_applied` provenance edge per
+      `RuleMatch` with `count > 0`. Edge format:
+      `from = receipt:<id>, to = redaction:<rule_id>:count=<n>,
+      kind = redaction_applied`.
+    - Populates `ReceiptBody::redactor_stack_hash` with
+      `redaction.stack_hash` (the field has been a placeholder
+      in the receipt schema since RFC-0001; step 18 finally
+      gives it a real producer).
+    - When `redaction = None`, the kernel's behaviour is
+      EXACTLY as before. Backwards-compatible — every existing
+      `RecordToolExecution` flow continues to work without
+      changes.
+    Internal `Kernel::mint` helper now takes a 7th argument
+    (`Option<Digest>` for `redactor_stack_hash`); all 5
+    callers updated.
+  - 4 new kernel integration tests:
+    `tool_execution_with_redaction_uses_redacted_hash_and_emits_applied_edges`,
+    `tool_execution_without_redaction_leaves_redactor_stack_hash_none_unchanged`,
+    `tool_execution_with_zero_count_redaction_matches_emits_no_edges`,
+    `tool_execution_with_redaction_signature_breaks_when_field_tampered`.
+    All 25 pre-step-18 kernel tests still pass unchanged.
+    Workspace 345 → 365.
+  - **Workspace deps added**: `regex = "1.10"` (full features
+    — `\b` / `\d` / `\w` need `unicode-perl`). ~2 MB source
+    contribution; <100 KB binary at release.
+  - **Bench** (gitignored at
+    `bench-results/17-output-sanitization.txt`):
+    `PatternRedactor::with_defaults` ~500 MiB/s sustained
+    throughput on 64 KiB+ payloads (~25 µs for 1 KiB, ~116 µs
+    for 64 KiB, ~2.4 ms for 1 MiB). Clean-input fast path
+    (no matches) ~2× faster. Fast enough that kernel-side
+    redaction is not a hot-path bottleneck.
+  - **Adopt-don't-copy citations**: `IronClaw`'s
+    `crates/ironclaw_safety/` redaction discipline (the
+    *philosophy* of "scan output for known secret patterns,
+    redact, sign the result before the audit chain commits"
+    is adopted; their pattern corpus informed our
+    default-rule list; their richer features —
+    structured-leak detection, PII redaction, output
+    sanitisation across logging stacks — are on the
+    future-step list).
+  - **Step doc** —
+    [`docs/steps/18-output-sanitization.md`](docs/steps/18-output-sanitization.md).
 - **WASM Host Imports** (Phase 3 step 4c / step 16c) — the
   capability-mediated host functions a WASM Component can import.
   The substrate swap is now complete: WASM tools can fetch HTTP,

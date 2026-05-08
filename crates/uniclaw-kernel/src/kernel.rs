@@ -114,6 +114,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             final_decision,
             constitution_rules,
             p.provenance,
+            None,
         );
 
         let kind = if let Some(e) = budget_error {
@@ -210,6 +211,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             final_decision,
             constitution_rules,
             provenance,
+            None,
         );
 
         let kind = match (a.response, budget_error) {
@@ -262,7 +264,14 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             provenance.push(edge);
         }
 
-        let receipt = self.mint(issued_at, action, Decision::Allowed, Vec::new(), provenance);
+        let receipt = self.mint(
+            issued_at,
+            action,
+            Decision::Allowed,
+            Vec::new(),
+            provenance,
+            None,
+        );
 
         KernelOutcome {
             receipt,
@@ -307,7 +316,14 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             provenance.push(edge);
         }
 
-        let receipt = self.mint(issued_at, action, Decision::Allowed, Vec::new(), provenance);
+        let receipt = self.mint(
+            issued_at,
+            action,
+            Decision::Allowed,
+            Vec::new(),
+            provenance,
+            None,
+        );
 
         KernelOutcome {
             receipt,
@@ -377,16 +393,21 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
         // - On success: one edge each for the tool input hash and the
         //   tool output hash (so audit readers can query either), plus
         //   one `secret_used` edge per secret reference the tool
-        //   consumed (the *reference name* — never the value).
+        //   consumed (the *reference name* — never the value), plus
+        //   one `redaction_applied` edge per redactor rule that
+        //   matched (step 18; only when the caller provided a
+        //   `redaction` payload).
         // - On failure: one edge with the error variant + message.
         //
-        // Capacity: 3 base edges + one per used secret. Most tool calls
-        // use 0 or 1 secrets so this rarely re-allocates.
+        // Capacity: 3 base edges + one per used secret + one per
+        // matched redaction rule. Most tool calls use 0-1 of each.
         let secrets_count = match &e.result {
             Ok(o) => o.metadata.secrets_used.len(),
             Err(_) => 0,
         };
-        let mut provenance: Vec<ProvenanceEdge> = Vec::with_capacity(3 + secrets_count);
+        let redaction_match_count = e.redaction.as_ref().map_or(0, |r| r.matches.len());
+        let mut provenance: Vec<ProvenanceEdge> =
+            Vec::with_capacity(3 + secrets_count + redaction_match_count);
         provenance.push(ProvenanceEdge {
             from: format!("receipt:{allowed_id_hex}"),
             to: format!("tool:{tool_name}"),
@@ -395,8 +416,19 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
 
         let (kind, action_target) = match &e.result {
             Ok(output) => {
+                // The output_hash that lands in the receipt:
+                // - if the caller supplied a `redaction` payload,
+                //   use its `redacted_output_hash` (the receipt
+                //   commits to the post-redaction form);
+                // - otherwise, the tool's own pre-computed
+                //   `output.output_hash`.
+                let final_output_hash = e
+                    .redaction
+                    .as_ref()
+                    .map_or(output.output_hash, |r| r.redacted_output_hash);
+
                 let in_hex = hex32(&e.allowed_receipt.body.action.input_hash.0);
-                let out_hex = hex32(&output.output_hash.0);
+                let out_hex = hex32(&final_output_hash.0);
                 provenance.push(ProvenanceEdge {
                     from: format!("receipt:{allowed_id_hex}"),
                     to: format!("input:{in_hex}"),
@@ -410,9 +442,6 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
                 // One edge per secret reference name. The name is what
                 // the tool was *configured* with (e.g. "github.token");
                 // the value is never anywhere in the receipt chain.
-                // This is the audit signal for "this run touched a
-                // privileged credential" — verifiers and SBOM-style
-                // tooling key off `kind = "secret_used"`.
                 for secret_ref in &output.metadata.secrets_used {
                     provenance.push(ProvenanceEdge {
                         from: format!("receipt:{allowed_id_hex}"),
@@ -420,10 +449,25 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
                         kind: "secret_used".into(),
                     });
                 }
+                // One edge per redaction rule with matches > 0.
+                // Skipping zero-count entries keeps the receipt
+                // small; auditors see only the rules that fired.
+                if let Some(redaction) = &e.redaction {
+                    for m in &redaction.matches {
+                        if m.count == 0 {
+                            continue;
+                        }
+                        provenance.push(ProvenanceEdge {
+                            from: format!("receipt:{allowed_id_hex}"),
+                            to: format!("redaction:{}:count={}", m.rule_id, m.count),
+                            kind: "redaction_applied".into(),
+                        });
+                    }
+                }
                 (
                     OutcomeKind::ToolExecutedAllowed {
                         input_hash: e.allowed_receipt.body.action.input_hash,
-                        output_hash: output.output_hash,
+                        output_hash: final_output_hash,
                     },
                     format!("tool={tool_name} status=ok"),
                 )
@@ -449,7 +493,20 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             input_hash: Digest([0u8; 32]),
         };
 
-        let receipt = self.mint(issued_at, action, Decision::Allowed, Vec::new(), provenance);
+        // Step 18: when the caller supplied a `redaction` payload,
+        // the receipt's `redactor_stack_hash` field gets populated
+        // with `redaction.stack_hash`. Otherwise it stays `None`,
+        // matching the pre-step-18 behaviour for backwards
+        // compatibility.
+        let redactor_stack_hash = e.redaction.as_ref().map(|r| r.stack_hash);
+        let receipt = self.mint(
+            issued_at,
+            action,
+            Decision::Allowed,
+            Vec::new(),
+            provenance,
+            redactor_stack_hash,
+        );
 
         Ok(KernelOutcome {
             receipt,
@@ -458,6 +515,12 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
         })
     }
 
+    // 7 args is a lot but the alternative — a builder, or
+    // bundling fields into a struct — would be more code with
+    // no behavioural benefit. The receipt body has 7 fields
+    // (excluding schema_version + merkle_leaf which the kernel
+    // computes), so the arity matches the signed shape.
+    #[allow(clippy::too_many_arguments)]
     fn mint(
         &mut self,
         issued_at: alloc::string::String,
@@ -465,6 +528,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
         final_decision: Decision,
         constitution_rules: Vec<RuleRef>,
         provenance: Vec<ProvenanceEdge>,
+        redactor_stack_hash: Option<Digest>,
     ) -> Receipt {
         let leaf_hash = compute_leaf_hash(
             self.state.sequence,
@@ -481,7 +545,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             decision: final_decision,
             constitution_rules,
             provenance,
-            redactor_stack_hash: None,
+            redactor_stack_hash,
             merkle_leaf: MerkleLeaf {
                 sequence: self.state.sequence,
                 leaf_hash,

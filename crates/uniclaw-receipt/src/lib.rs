@@ -100,6 +100,55 @@ pub struct ProvenanceEdge {
     pub kind: String,
 }
 
+/// One redactor rule's match-count after a redaction pass.
+///
+/// Phase 3 step 18 audit primitive. Recorded in
+/// [`RedactionReport::matches`] and emitted by the kernel as a
+/// `redaction_applied` provenance edge per rule with `count > 0`.
+///
+/// The `rule_id` is the operator-stable identifier of the rule
+/// (e.g. `"github_pat"`, `"openai_key"`). Auditors correlate
+/// `rule_id` ↔ rule definition via the operator's published
+/// redactor configuration, OR via the future `$kernel/policy/redactor`
+/// receipt class (Phase 6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleMatch {
+    pub rule_id: String,
+    pub count: u32,
+}
+
+/// Pre-receipt audit data describing what a redactor stack did to
+/// a tool's output. Produced *outside* the kernel (by code that
+/// has access to the raw bytes) and submitted alongside a tool
+/// execution event. The kernel reads three fields:
+///
+/// - `redacted_output_hash` becomes the receipt's `output_hash`
+///   (committing the receipt to the post-redaction form).
+/// - `matches` becomes one `redaction_applied` provenance edge
+///   per rule with `count > 0`.
+/// - `stack_hash` populates [`ReceiptBody::redactor_stack_hash`].
+///
+/// The original (un-redacted) bytes are NEVER part of this
+/// struct — they only exist transiently in the producer's
+/// memory. The receipt commits to the redacted form by design.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedactionReport {
+    /// BLAKE3 of the redacted output bytes. The kernel uses this
+    /// as `output_hash` instead of the un-redacted hash.
+    pub redacted_output_hash: Digest,
+
+    /// Per-rule match counts. Rules with `count == 0` may be
+    /// omitted; the kernel only emits provenance edges for
+    /// non-zero counts.
+    pub matches: Vec<RuleMatch>,
+
+    /// Stable hash committing to which redactor stack ran.
+    /// Convention: BLAKE3 over the joined rule IDs in order
+    /// (separator-defined by the producer; see
+    /// `uniclaw-redact::RedactorStack::stack_hash`).
+    pub stack_hash: Digest,
+}
+
 /// Position of this action in the Merkle audit chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerkleLeaf {

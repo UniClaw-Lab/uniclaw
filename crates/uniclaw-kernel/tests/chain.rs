@@ -1014,6 +1014,7 @@ fn tool_execution_success_flow_round_trips_via_noop_tool() {
             allowed_receipt: allowed.clone(),
             original_proposal: prop,
             result: Ok(output.clone()),
+            redaction: None,
         }))
         .expect("kernel records execution");
 
@@ -1120,6 +1121,7 @@ fn tool_execution_emits_secret_used_provenance_edges_for_each_used_secret() {
             allowed_receipt: allowed.clone(),
             original_proposal: prop,
             result: Ok(output),
+            redaction: None,
         }))
         .expect("kernel records execution");
 
@@ -1190,6 +1192,7 @@ fn tool_execution_with_no_secrets_used_emits_only_base_edges() {
             allowed_receipt: allowed,
             original_proposal: prop,
             result: Ok(output),
+            redaction: None,
         }))
         .expect("ok");
 
@@ -1202,6 +1205,276 @@ fn tool_execution_with_no_secrets_used_emits_only_base_edges() {
             .all(|e| e.kind != "secret_used"),
         "no secret_used edges expected when secrets_used is empty",
     );
+}
+
+// =====================================================================
+// Step 18 — Redaction integration
+// =====================================================================
+//
+// The kernel's `RecordToolExecution` handler accepts an optional
+// `redaction: RedactionReport`. When present, three things change in
+// the resulting receipt:
+//
+// 1. `body.action.target` (and `OutcomeKind::ToolExecutedAllowed::output_hash`)
+//    use the report's `redacted_output_hash`, not the tool's original
+//    `output.output_hash`. This commits the receipt to the
+//    post-redaction form.
+// 2. One `redaction_applied` provenance edge per `RuleMatch` with
+//    `count > 0`. Zero-count entries are skipped.
+// 3. `body.redactor_stack_hash` is populated with `report.stack_hash`
+//    (was always `None` before step 18).
+//
+// All of this is purely additive: existing tests with
+// `redaction: None` still pass unchanged.
+
+#[test]
+fn tool_execution_with_redaction_uses_redacted_hash_and_emits_applied_edges() {
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let input = b"redacted call";
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "echo", input);
+
+    // Synthetic tool output. The "original" bytes are what the tool
+    // returned; the redaction report claims a *different* hash that
+    // we'll verify lands in the receipt.
+    let original_bytes = b"hello ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA world".to_vec();
+    let original_hash = Digest(*blake3::hash(&original_bytes).as_bytes());
+
+    // Pretend the redactor produced these bytes (we don't run the
+    // actual redactor here — the kernel doesn't care, it just trusts
+    // the report). The hash is what matters for the receipt.
+    let redacted_bytes = b"hello [REDACTED:default::github_pat] world".to_vec();
+    let redacted_hash = Digest(*blake3::hash(&redacted_bytes).as_bytes());
+    let stack_hash = Digest(*blake3::hash(b"v0\ndefault\n").as_bytes());
+
+    let output = ToolOutput {
+        bytes: original_bytes,
+        output_hash: original_hash,
+        metadata: ToolMetadata::default(),
+    };
+
+    let report = uniclaw_receipt::RedactionReport {
+        redacted_output_hash: redacted_hash,
+        matches: vec![uniclaw_receipt::RuleMatch {
+            rule_id: "default::github_pat".into(),
+            count: 1,
+        }],
+        stack_hash,
+    };
+
+    let exec = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed.clone(),
+            original_proposal: prop,
+            result: Ok(output),
+            redaction: Some(report),
+        }))
+        .expect("kernel records execution");
+
+    // Receipt verifies under the kernel's signing key.
+    crypto::verify(&exec.receipt).expect("execution receipt signed");
+
+    // OutcomeKind carries the POST-redaction hash, not the original.
+    match exec.kind {
+        OutcomeKind::ToolExecutedAllowed {
+            input_hash: _,
+            output_hash,
+        } => assert_eq!(
+            output_hash, redacted_hash,
+            "post-redaction hash should be the receipt-bound output_hash"
+        ),
+        other => panic!("expected ToolExecutedAllowed, got {other:?}"),
+    }
+
+    // Body's redactor_stack_hash is populated.
+    assert_eq!(exec.receipt.body.redactor_stack_hash, Some(stack_hash));
+
+    // Exactly one redaction_applied edge (the rule with count=1).
+    let edges: Vec<_> = exec
+        .receipt
+        .body
+        .provenance
+        .iter()
+        .filter(|e| e.kind == "redaction_applied")
+        .collect();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(
+        edges[0].to, "redaction:default::github_pat:count=1",
+        "edge target encodes rule_id + count",
+    );
+
+    // The tool_output edge points at the REDACTED hash hex, not
+    // the original.
+    let out_hex = edges_hex(&redacted_hash);
+    let tool_output = exec
+        .receipt
+        .body
+        .provenance
+        .iter()
+        .find(|e| e.kind == "tool_output")
+        .expect("tool_output edge present");
+    assert_eq!(tool_output.to, format!("output:{out_hex}"));
+}
+
+#[test]
+fn tool_execution_without_redaction_leaves_redactor_stack_hash_none_unchanged() {
+    // Backwards compat — every test above this one ran without the
+    // redaction field. We assert the explicit invariant once.
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let input = b"no redaction";
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "echo", input);
+    let bytes = input.to_vec();
+    let output = ToolOutput {
+        output_hash: Digest(*blake3::hash(&bytes).as_bytes()),
+        bytes,
+        metadata: ToolMetadata::default(),
+    };
+
+    let exec = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed,
+            original_proposal: prop,
+            result: Ok(output),
+            redaction: None,
+        }))
+        .expect("ok");
+
+    assert!(exec.receipt.body.redactor_stack_hash.is_none());
+    assert!(
+        exec.receipt
+            .body
+            .provenance
+            .iter()
+            .all(|e| e.kind != "redaction_applied")
+    );
+}
+
+#[test]
+fn tool_execution_with_zero_count_redaction_matches_emits_no_edges() {
+    // A redaction report can carry zero-count entries (e.g., the
+    // operator's stack ran but nothing matched). The kernel skips
+    // those when emitting provenance — only matches with count > 0
+    // produce an edge. The redactor_stack_hash still gets populated
+    // because the stack DID run.
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let input = b"clean output";
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "echo", input);
+    let bytes = input.to_vec();
+    let output_hash = Digest(*blake3::hash(&bytes).as_bytes());
+    let output = ToolOutput {
+        bytes,
+        output_hash,
+        metadata: ToolMetadata::default(),
+    };
+
+    let stack_hash = Digest(*blake3::hash(b"v0\ndefault\n").as_bytes());
+    let report = uniclaw_receipt::RedactionReport {
+        redacted_output_hash: output_hash,
+        matches: vec![uniclaw_receipt::RuleMatch {
+            rule_id: "default::github_pat".into(),
+            count: 0,
+        }],
+        stack_hash,
+    };
+
+    let exec = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed,
+            original_proposal: prop,
+            result: Ok(output),
+            redaction: Some(report),
+        }))
+        .expect("ok");
+
+    // stack_hash recorded — the stack ran.
+    assert_eq!(exec.receipt.body.redactor_stack_hash, Some(stack_hash));
+    // No redaction_applied edges — nothing matched.
+    assert!(
+        exec.receipt
+            .body
+            .provenance
+            .iter()
+            .all(|e| e.kind != "redaction_applied")
+    );
+}
+
+#[test]
+fn tool_execution_with_redaction_signature_breaks_when_field_tampered() {
+    // The receipt signs over the body, including
+    // redactor_stack_hash. A man-in-the-middle that tampers with
+    // the field (replacing the hash with one that points at a
+    // less-strict redactor stack) will break verification.
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut kernel = Kernel::new(
+        Ed25519Signer(key),
+        CountingClock(std::cell::Cell::new(0)),
+        EmptyConstitution,
+    );
+
+    let input = b"tamper test";
+    let (allowed, prop) = approved_tool_call(&mut kernel, "noop", "echo", input);
+    let bytes = input.to_vec();
+    let output_hash = Digest(*blake3::hash(&bytes).as_bytes());
+    let output = ToolOutput {
+        bytes,
+        output_hash,
+        metadata: ToolMetadata::default(),
+    };
+
+    let stack_hash = Digest(*blake3::hash(b"strict-stack").as_bytes());
+    let report = uniclaw_receipt::RedactionReport {
+        redacted_output_hash: output_hash,
+        matches: vec![],
+        stack_hash,
+    };
+
+    let exec = kernel
+        .handle(KernelEvent::record_tool_execution(ToolExecution {
+            allowed_receipt: allowed,
+            original_proposal: prop,
+            result: Ok(output),
+            redaction: Some(report),
+        }))
+        .expect("ok");
+
+    crypto::verify(&exec.receipt).expect("intact receipt verifies");
+
+    // Tamper: replace stack hash with the lax-stack hash.
+    let lax_stack = Digest(*blake3::hash(b"lax-stack").as_bytes());
+    let mut tampered = exec.receipt.clone();
+    tampered.body.redactor_stack_hash = Some(lax_stack);
+    assert!(
+        crypto::verify(&tampered).is_err(),
+        "tampered redactor_stack_hash must break verification",
+    );
+}
+
+/// Helper used by the redaction tests to render `output:<hex>`
+/// edge targets the same way the kernel does.
+fn edges_hex(d: &Digest) -> String {
+    use core::fmt::Write;
+    let mut s = String::with_capacity(64);
+    for b in d.0 {
+        write!(s, "{b:02x}").unwrap();
+    }
+    s
 }
 
 #[test]
@@ -1220,6 +1493,7 @@ fn tool_execution_failure_path_records_error_in_provenance_not_decision() {
             allowed_receipt: allowed,
             original_proposal: prop,
             result: Err(ToolError::Failed("disk full".into())),
+            redaction: None,
         }))
         .expect("ok");
 
@@ -1271,6 +1545,7 @@ fn tool_execution_rejects_forged_allowed_receipt() {
                 output_hash: Digest([0u8; 32]),
                 metadata: ToolMetadata::default(),
             }),
+            redaction: None,
         }))
         .expect_err("forged receipt rejected");
     assert_eq!(
@@ -1309,6 +1584,7 @@ fn tool_execution_rejects_receipt_signed_by_different_kernel() {
                 output_hash: Digest([0u8; 32]),
                 metadata: ToolMetadata::default(),
             }),
+            redaction: None,
         }))
         .expect_err("foreign-kernel receipt rejected");
     assert_eq!(
@@ -1344,6 +1620,7 @@ fn tool_execution_rejects_receipt_whose_decision_isnt_allowed() {
                 output_hash: Digest([0u8; 32]),
                 metadata: ToolMetadata::default(),
             }),
+            redaction: None,
         }))
         .expect_err("not-Allowed receipt rejected");
     assert_eq!(
@@ -1378,6 +1655,7 @@ fn tool_execution_rejects_receipt_whose_action_isnt_a_tool_call() {
                 output_hash: Digest([0u8; 32]),
                 metadata: ToolMetadata::default(),
             }),
+            redaction: None,
         }))
         .expect_err("non-tool action rejected");
     assert_eq!(
@@ -1409,6 +1687,7 @@ fn tool_execution_rejects_when_proposal_action_doesnt_match_receipt() {
                 output_hash: Digest([0u8; 32]),
                 metadata: ToolMetadata::default(),
             }),
+            redaction: None,
         }))
         .expect_err("action substitution rejected");
     assert_eq!(

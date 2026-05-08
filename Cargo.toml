@@ -17,6 +17,7 @@ members = [
     "crates/uniclaw-tools-http",
     "crates/uniclaw-secrets",
     "crates/uniclaw-tools-wasm",
+    "crates/uniclaw-redact",
 ]
 
 [workspace.package]
@@ -87,6 +88,23 @@ wasmtime = "44"
 wasmtime-wasi = "44"
 wat = "1"
 
+# Regular expressions — used only by uniclaw-redact for compiled
+# pattern matching against tool-output bytes. Standard, fast,
+# well-tested. Brings ~2 MB of source deps; trimmed binary
+# contribution is small (<100 KB stripped). For v0 we accept
+# the dep weight; future-step optimisation could swap to a
+# hand-rolled state machine for ASCII-prefix patterns if the
+# weight becomes a real constraint.
+# `unicode-perl` is what makes `\b`/`\d`/`\w` work even on ASCII
+# inputs (without it the regex compiler refuses these classes).
+# We need them for the credential-prefix patterns. Defaults pull
+# in the full unicode tables (~1 MB binary contribution); the
+# v0 acceptance is "credentials are ASCII; default features keep
+# the patterns simple to write." A future tuning could trim by
+# switching to `regex::bytes::Regex` and rewriting the patterns
+# without word-class shorthands.
+regex = "1.10"
+
 # Internal members.
 uniclaw-receipt = { path = "crates/uniclaw-receipt", version = "0.0.1" }
 uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
@@ -103,6 +121,7 @@ uniclaw-tools = { path = "crates/uniclaw-tools", version = "0.0.1" }
 uniclaw-tools-http = { path = "crates/uniclaw-tools-http", version = "0.0.1" }
 uniclaw-secrets = { path = "crates/uniclaw-secrets", version = "0.0.1" }
 uniclaw-tools-wasm = { path = "crates/uniclaw-tools-wasm", version = "0.0.1" }
+uniclaw-redact = { path = "crates/uniclaw-redact", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]

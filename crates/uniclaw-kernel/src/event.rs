@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use uniclaw_approval::ApprovalDecision;
 use uniclaw_budget::{CapabilityLease, ResourceUse};
-use uniclaw_receipt::{Action, Decision, ProvenanceEdge, Receipt, RuleRef};
+use uniclaw_receipt::{Action, Decision, ProvenanceEdge, Receipt, RedactionReport, RuleRef};
 use uniclaw_sleep::{DeepSleepReport, LightSleepReport};
 use uniclaw_tools::{ToolError, ToolOutput};
 
@@ -103,8 +103,28 @@ pub struct ToolExecution {
     pub original_proposal: Proposal,
     /// What the tool returned (or why it failed). Output bytes are
     /// **not** carried into the kernel — only the precomputed
-    /// `output_hash` from the `ToolOutput` makes it into the receipt.
+    /// `output_hash` from the `ToolOutput` makes it into the receipt
+    /// when no redaction occurred. With redaction (see
+    /// [`Self::redaction`]), the `output_hash` is *replaced* by
+    /// the redaction report's `redacted_output_hash`.
     pub result: Result<ToolOutput, ToolError>,
+    /// Optional redaction audit data. When present, the kernel:
+    ///
+    /// 1. Uses `redaction.redacted_output_hash` as the receipt's
+    ///    `output_hash` (committing the receipt to the
+    ///    post-redaction form, not the original `result`'s hash).
+    /// 2. Mints one `redaction_applied` provenance edge per
+    ///    `redaction.matches` entry with `count > 0`.
+    /// 3. Populates [`uniclaw_receipt::ReceiptBody::redactor_stack_hash`]
+    ///    with `redaction.stack_hash`.
+    ///
+    /// `None` (and missing-on-deserialize, by default) means
+    /// the kernel records the original `output.output_hash` as
+    /// today and leaves `redactor_stack_hash` set to `None`.
+    /// Step 18 (the introduction of this field) is purely
+    /// additive — every existing `RecordToolExecution` flow
+    /// works unchanged.
+    pub redaction: Option<RedactionReport>,
 }
 
 /// Operator's response to a previously-emitted `Pending` receipt.
