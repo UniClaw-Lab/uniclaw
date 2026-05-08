@@ -2362,9 +2362,14 @@ dependencies = [
 name = "uniclaw-tools-wasm"
 version = "0.0.1"
 dependencies = [
+ "base64",
  "blake3",
+ "serde",
+ "serde_json",
  "uniclaw-receipt",
+ "uniclaw-secrets",
  "uniclaw-tools",
+ "uniclaw-tools-http",
  "wasmtime",
  "wasmtime-wasi",
  "wat",

@@ -100,11 +100,13 @@
 mod bindings;
 mod config;
 mod error;
+mod host;
 mod limits;
 mod tool;
 
 pub use config::WasmConfig;
 pub use error::BuildError;
+pub use host::{HostState, LogRecord, MAX_LOG_ENTRIES, MAX_LOG_MESSAGE_BYTES};
 pub use tool::WasmTool;
 
 // Re-export the trait so callers don't need a separate `use uniclaw_tools::Tool`.

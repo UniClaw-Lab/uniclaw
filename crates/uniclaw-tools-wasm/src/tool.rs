@@ -23,26 +23,42 @@ use uniclaw_tools::{
     ApprovalPolicy, Tool, ToolCall, ToolError, ToolManifest, ToolMetadata, ToolOutput,
 };
 
+use uniclaw_secrets::SecretBroker;
+use uniclaw_tools_http::HttpFetchTool;
+
 use crate::bindings;
 use crate::config::WasmConfig;
 use crate::error::BuildError;
+use crate::host::HostState;
 use crate::limits::StoreData;
 
 /// What kind of wasm artifact a [`WasmTool`] is wrapping.
 ///
-/// Tools constructed via [`WasmTool::from_wat`] or
-/// [`WasmTool::from_module_bytes`] use [`WasmKind::Core`] and the
-/// v0 packed-i64 ABI from 16a. Tools constructed via
-/// [`WasmTool::from_component_bytes`] use [`WasmKind::Component`]
-/// and the typed Component Model surface from 16b
-/// (`uniclaw:tool/tool-api.call(list<u8>) -> result<list<u8>, string>`).
+/// - [`WasmKind::Core`] — 16a's packed-i64 ABI. Built via
+///   [`WasmTool::from_wat`] / [`WasmTool::from_module_bytes`].
+/// - [`WasmKind::Component`] — 16b's typed `tool` world.
+///   Built via [`WasmTool::from_component_bytes`]. Exports only;
+///   no host imports.
+/// - [`WasmKind::ComponentWithHost`] — 16c's typed
+///   `tool-with-host` world. Built via
+///   [`WasmTool::from_component_bytes_with_host`]. The guest
+///   imports `host` (capability-mediated http-fetch, broker-
+///   backed secret-exists, log-message, now-millis) plus exports
+///   `tool-api`. The constructor wires an `Arc<HttpFetchTool>` +
+///   `Arc<dyn SecretBroker>` that satisfy the imports.
 ///
-/// The two kinds use different wasmtime types, different Linkers,
-/// and different calling conventions, so they're modeled as
-/// separate variants rather than dynamically dispatched.
+/// The three kinds use different bindgen output, different
+/// linkers, and different calling conventions, so they're
+/// modeled as separate variants rather than dynamically
+/// dispatched.
 enum WasmKind {
     Core(Module),
     Component(Component),
+    ComponentWithHost {
+        component: Component,
+        http: Arc<HttpFetchTool>,
+        broker: Arc<dyn SecretBroker>,
+    },
 }
 
 /// A [`Tool`] backed by a sandboxed WebAssembly module.
@@ -79,6 +95,7 @@ impl core::fmt::Debug for WasmTool {
         let kind_label = match &self.kind {
             WasmKind::Core(_) => "core",
             WasmKind::Component(_) => "component",
+            WasmKind::ComponentWithHost { .. } => "component-with-host",
         };
         f.debug_struct("WasmTool")
             .field("manifest", &self.manifest)
@@ -170,6 +187,54 @@ impl WasmTool {
         })
     }
 
+    /// Compile a tool from Component Model bytes that conform to
+    /// the `tool-with-host` world (16c). The component imports
+    /// `host` (capability-mediated http-fetch, broker-backed
+    /// secret-exists, log-message, now-millis) and exports
+    /// `tool-api`.
+    ///
+    /// `http` is the [`HttpFetchTool`] instance backing the
+    /// guest's `http-fetch` import. The guest's calls go through
+    /// *this exact* tool — same allowlist, same SSRF gate, same
+    /// bounded read. Whatever capability allowlist `http` was
+    /// built with is the allowlist the guest sees.
+    ///
+    /// `broker` backs the guest's `secret-exists` import. The
+    /// broker is also the one `http` uses for `bearer-header`
+    /// auth injection — typically the operator constructs both
+    /// with the same broker; we don't try to enforce that
+    /// (there's no way to ask `HttpFetchTool` for its broker
+    /// reference in v0).
+    ///
+    /// # Errors
+    /// See [`BuildError`].
+    pub fn from_component_bytes_with_host(
+        bytes: &[u8],
+        manifest: ToolManifest,
+        config: WasmConfig,
+        http: Arc<HttpFetchTool>,
+        broker: Arc<dyn SecretBroker>,
+    ) -> Result<Self, BuildError> {
+        let engine = build_engine()?;
+
+        let component =
+            Component::new(&engine, bytes).map_err(|e| BuildError::InvalidWasm(e.to_string()))?;
+
+        let ticker = Arc::new(EpochTicker::start(&engine, config.epoch_tick));
+
+        Ok(Self {
+            manifest,
+            config,
+            engine,
+            kind: WasmKind::ComponentWithHost {
+                component,
+                http,
+                broker,
+            },
+            _ticker: ticker,
+        })
+    }
+
     fn check_required_core_exports(module: &Module) -> Result<(), BuildError> {
         let mut have_memory = false;
         let mut have_alloc = false;
@@ -237,6 +302,11 @@ impl Tool for WasmTool {
         match &self.kind {
             WasmKind::Core(module) => self.call_core(module, tool_call),
             WasmKind::Component(component) => self.call_component(component, tool_call),
+            WasmKind::ComponentWithHost {
+                component,
+                http,
+                broker,
+            } => self.call_component_with_host(component, http, broker, tool_call),
         }
     }
 
@@ -247,10 +317,25 @@ impl Tool for WasmTool {
 
 impl WasmTool {
     /// Per-call store factory. Builds a fresh [`StoreData`] (memory
-    /// cap + empty WASI context) and applies the fuel + epoch
-    /// deadline. Used by both `call_core` and `call_component`.
+    /// cap + empty WASI context, no host) and applies the fuel +
+    /// epoch deadline. Used by `call_core` and `call_component`.
     fn fresh_store(&self) -> Result<Store<StoreData>, ToolError> {
-        let mut store = Store::new(&self.engine, StoreData::new(self.config.max_memory_bytes));
+        self.fresh_store_with(StoreData::new(self.config.max_memory_bytes))
+    }
+
+    /// Per-call store factory with host imports configured. Used
+    /// by `call_component_with_host`. The `HostState` carries the
+    /// `Arc<HttpFetchTool>` + `Arc<dyn SecretBroker>` plus the
+    /// per-call accumulators.
+    fn fresh_store_with_host(&self, host_state: HostState) -> Result<Store<StoreData>, ToolError> {
+        self.fresh_store_with(StoreData::with_host(
+            self.config.max_memory_bytes,
+            host_state,
+        ))
+    }
+
+    fn fresh_store_with(&self, data: StoreData) -> Result<Store<StoreData>, ToolError> {
+        let mut store = Store::new(&self.engine, data);
         store.limiter(|s| s);
         store
             .set_fuel(self.config.fuel)
@@ -377,7 +462,7 @@ impl WasmTool {
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| ToolError::Failed(format!("add WASI to linker: {e}")))?;
 
-        let instance = bindings::Tool::instantiate(&mut store, component, &linker)
+        let instance = bindings::tool::Tool::instantiate(&mut store, component, &linker)
             .map_err(|e| map_wasm_error(&e))?;
 
         let result = instance
@@ -396,6 +481,64 @@ impl WasmTool {
             bytes,
             output_hash,
             metadata: ToolMetadata::default(),
+        })
+    }
+
+    /// 16c Component-with-host call path. Drives the same
+    /// `tool-api.call(...)` export as 16b's `call_component`,
+    /// but the Component is allowed to *import* `host` and the
+    /// linker wires those imports to [`HostState`]'s
+    /// implementations. After the call returns, the per-call
+    /// `secrets_used` accumulator is harvested into
+    /// [`ToolOutput::metadata`] so the kernel can mint
+    /// `secret_used` provenance edges.
+    fn call_component_with_host(
+        &self,
+        component: &Component,
+        http: &Arc<HttpFetchTool>,
+        broker: &Arc<dyn SecretBroker>,
+        tool_call: &ToolCall,
+    ) -> Result<ToolOutput, ToolError> {
+        let host_state = HostState::new(Arc::clone(http), Arc::clone(broker));
+        let mut store = self.fresh_store_with_host(host_state)?;
+
+        // The 16c linker provides BOTH WASI (for std-using
+        // Components, same as 16b) AND the Uniclaw host imports.
+        let mut linker = ComponentLinker::<StoreData>::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(|e| ToolError::Failed(format!("add WASI to linker: {e}")))?;
+        bindings::with_host::ToolWithHost::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state: &mut StoreData| state,
+        )
+        .map_err(|e| ToolError::Failed(format!("add host imports to linker: {e}")))?;
+
+        let instance =
+            bindings::with_host::ToolWithHost::instantiate(&mut store, component, &linker)
+                .map_err(|e| map_wasm_error(&e))?;
+
+        let result = instance
+            .uniclaw_tool_tool_api()
+            .call_call(&mut store, &tool_call.input)
+            .map_err(|e| map_wasm_error(&e))?;
+
+        // Harvest the host-side accumulators BEFORE consuming the
+        // store. `secrets_used` is the deduplicated union of
+        // every secret reference name the guest's host calls
+        // touched.
+        let secrets_used = store
+            .data()
+            .host_state()
+            .map(HostState::secrets_used)
+            .unwrap_or_default();
+
+        let bytes = result.map_err(|msg| ToolError::Failed(format!("guest: {msg}")))?;
+        let output_hash = Digest(*blake3::hash(&bytes).as_bytes());
+
+        Ok(ToolOutput {
+            bytes,
+            output_hash,
+            metadata: ToolMetadata { secrets_used },
         })
     }
 }

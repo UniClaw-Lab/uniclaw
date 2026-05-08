@@ -12,6 +12,115 @@ format change history.
 
 ### Added
 
+- **WASM Host Imports** (Phase 3 step 4c / step 16c) — the
+  capability-mediated host functions a WASM Component can import.
+  The substrate swap is now complete: WASM tools can fetch HTTP,
+  check secret existence, log, and read the clock through the
+  *same* machinery native tools use, with the *same* receipt-
+  format guarantees the kernel mints for native tools.
+  - Extended `crates/uniclaw-tools-wasm/wit/tool.wit` with a
+    new `host` interface containing four functions:
+    - `log-message(level, message)` — structured logging,
+      rate-limited host-side (1000 entries / 4 KiB per message;
+      cap-busting calls become no-ops).
+    - `now-millis()` — Unix epoch milliseconds.
+    - `secret-exists(name) -> bool` — broker-backed existence
+      check. **Returns the boolean only; never the value.**
+    - `http-fetch(url, auth, timeout-ms) -> result<http-response,
+      string>` — capability-mediated HTTP. The host delegates to
+      the operator-supplied `HttpFetchTool` instance — *same*
+      capability allowlist, *same* SSRF gate, *same* broker-
+      backed Authorization injection. Whatever HttpFetchTool
+      enforces, the guest gets, automatically.
+  - New world `tool-with-host` (alongside the existing `tool`
+    world from 16b) that imports `host` and exports `tool-api`.
+    Backwards-compatible: 16b Components built against `tool`
+    keep working unchanged.
+  - New `WasmTool::from_component_bytes_with_host(bytes,
+    manifest, config, http: Arc<HttpFetchTool>, broker:
+    Arc<dyn SecretBroker>)` constructor. The guest's `http-fetch`
+    calls go through `http`; `secret-exists` checks go through
+    `broker`. The operator passes both because `HttpFetchTool`
+    doesn't currently expose its internal broker reference;
+    typically both Arcs reference the same broker.
+  - `WasmTool::WasmKind` gains a `ComponentWithHost` variant
+    alongside `Core` and `Component`. `Tool::call` dispatches
+    three ways. The 16a/16b paths are unchanged.
+  - New `src/host.rs` module:
+    - `HostState` struct holds `Arc<HttpFetchTool>` +
+      `Arc<dyn SecretBroker>` + per-call accumulators
+      (`secrets_used: Vec<String>`, `logs: Vec<LogRecord>`,
+      `http_fetch_calls: u32`). Constructed fresh per
+      `WasmTool::call`; accumulators don't leak across calls.
+    - `host::Host` trait (bindgen-generated) is implemented on
+      `StoreData` (the per-call store-data type) and delegates
+      to the inner `Option<HostState>`. For 16a/16b paths the
+      Option stays None and the trait methods are never reached
+      because the linker doesn't add the host imports.
+    - `MAX_LOG_ENTRIES` = 1000, `MAX_LOG_MESSAGE_BYTES` = 4096
+      (IronClaw's values).
+  - `StoreData` (formerly just memory cap + WasiCtx + ResourceTable)
+    gains an `Option<HostState>` field. Two factories: `new(...)`
+    (no host; for 16a/16b) and `with_host(..., HostState)` (16c).
+  - **`secret_used` provenance edges work for WASM tools by
+    construction.** Per-call `secrets_used` (deduplicated union of
+    every secret ref name the guest's `http-fetch` calls touched)
+    is harvested from `HostState` into `ToolOutput::metadata.secrets_used`
+    when the call returns. The kernel's existing
+    `RecordToolExecution` handler reads that field and mints
+    `ProvenanceEdge { from: "receipt:<id>", to: "secret:<ref>",
+    kind: "secret_used" }` — same as for native HttpFetchTool
+    calls, no kernel changes needed.
+  - **Test fixture**: `tests/fixtures/http-tool-component/`. A
+    Rust→WASM Component implementing `tool-with-host` that
+    parses tiny ASCII command strings (`"fetch <url>"`,
+    `"fetch_auth <url> <secret-ref>"`, `"check <name>"`,
+    `"now"`, `"log"`) and uses each host import accordingly.
+    Pre-built ~55 KB `.wasm` committed at
+    `tests/fixtures/http-tool-component.wasm`. Source +
+    `BUILD.md` next to it; CI loads the artefact as-is.
+  - 9 new integration tests in `tests/host_imports.rs` covering
+    every host-import path against a localhost mock server:
+    response body returned to guest, Authorization header
+    actually injected on the wire, capability denial relayed as
+    `Err(string)`, broker-fetch failure fail-closed without
+    opening a socket, secret-exists yes/no, now-millis, log
+    doesn't crash, fuel bound inherited from 16a, invalid bytes
+    rejected at construction. All 21 16a/16b tests still pass
+    unchanged. Workspace 336 → 345.
+  - **Adopt-don't-copy citations**: `IronClaw`'s
+    `near:agent@0.3.0/host` interface design (we adopted the
+    shape — log-level enum, structured response records,
+    auth-by-reference, secret-existence-only — with a leaner
+    v0 subset; richer pieces like `workspace-read`,
+    `tool-invoke`, `headers-json` string land additively when
+    use cases demand them); IronClaw's `StoreData` shape
+    combining limiter + WasiCtx + Host trait impl into one
+    type; IronClaw's rate-limit constants. No source borrowed;
+    citations live in `wit/tool.wit`, `src/lib.rs`, `src/host.rs`.
+  - New workspace deps in `uniclaw-tools-wasm`:
+    `uniclaw-tools-http` (the host's `http-fetch` shim
+    delegates to `HttpFetchTool::call`), `uniclaw-secrets`
+    (for the `SecretBroker` trait passed to the constructor),
+    `serde` + `serde_json` (the host bridge round-trips
+    through `HttpFetchInput`/`HttpFetchOutput` JSON because
+    `HttpFetchTool::call` takes/returns the JSON envelope —
+    a future-step refactor could expose a non-JSON entry
+    point), `base64` (decodes the response body from
+    HttpFetchOutput's base64 envelope into the bytes the
+    guest sees).
+  - **Bench** (gitignored at
+    `bench-results/16-wasm-host-imports.txt`): direct
+    `HttpFetchTool::call` ~16.4 ms/call vs WASM-via-host-import
+    ~27.7 ms/call; host-import overhead +11.3 ms (+68%). Per-
+    call cost dominated by Component instantiation,
+    canonical-ABI marshalling of the `http-response` record,
+    and the JSON+base64 round-trip in the host bridge.
+    `InstancePre` + persistent compile cache + a non-JSON
+    HttpFetchTool entry point are the obvious future-step
+    optimisations; all are pure internal swaps.
+  - **Step doc** —
+    [`docs/steps/16c-wasm-host-imports.md`](docs/steps/16c-wasm-host-imports.md).
 - **WASM Component Model layer** (Phase 3 step 4b / step 16b) — the
   typed-interface upgrade on top of 16a's runtime skeleton. Tools
   can now be authored as Component-Model wasm against a small WIT

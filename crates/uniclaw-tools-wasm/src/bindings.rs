@@ -1,16 +1,22 @@
-//! Auto-generated wasmtime Component Model bindings for the
-//! `uniclaw:tool` package's `tool` world.
+//! Auto-generated wasmtime Component Model bindings.
 //!
-//! The macro reads `wit/tool.wit` (relative to the crate root) and
-//! emits a `Tool` host struct with `instantiate` + a `tool_api()`
-//! accessor that exposes the typed `call_call(...)` method bound
-//! to the guest's `tool-api.call` export.
+//! Two `bindgen!` invocations, one per world:
 //!
-//! The bindgen-generated code triggers a few clippy lints that are
-//! out of our control (it lives below the `unsafe_code = "forbid"`
-//! workspace lint in the macro-expanded form, so the generator
-//! emits attribute-allows; we add module-level allows here so the
-//! pedantic lints don't fail the build either).
+//! - `tool` — 16b's export-only world. The bindgen output is the
+//!   `tool::Tool` host struct used by [`crate::WasmTool::from_component_bytes`].
+//! - `tool-with-host` — 16c's world that also imports `host`. The
+//!   bindgen output is the `with_host::ToolWithHost` host struct
+//!   plus a generated `Host` trait that the host implements (in
+//!   `src/host.rs`) to satisfy the imports.
+//!
+//! Each world lives in its own submodule so type names don't
+//! collide. The two outputs share nothing at runtime; a Component
+//! is built against one or the other, and `WasmTool` records
+//! which one via its `WasmKind` enum.
+//!
+//! The bindgen-generated code triggers a flock of pedantic
+//! lints out of our control. Module-level allows here keep the
+//! workspace lints from failing the build.
 
 #![allow(
     clippy::all,
@@ -21,7 +27,16 @@
     missing_debug_implementations
 )]
 
-wasmtime::component::bindgen!({
-    path: "wit/tool.wit",
-    world: "tool",
-});
+pub mod tool {
+    wasmtime::component::bindgen!({
+        path: "wit/tool.wit",
+        world: "tool",
+    });
+}
+
+pub mod with_host {
+    wasmtime::component::bindgen!({
+        path: "wit/tool.wit",
+        world: "tool-with-host",
+    });
+}
