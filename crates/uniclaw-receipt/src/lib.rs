@@ -8,6 +8,18 @@
 //! the wire format is needed.
 //!
 //! Receipt format spec: see `RFCS/0001-receipt-format.md`.
+//!
+//! ## Canonicalization (v2 +)
+//!
+//! Receipts at `schema_version >= 2` use **RFC 8785 JSON
+//! Canonicalization Scheme** for content-id and signature bytes
+//! (see [`canonical`]). The canonical encoding is deterministic
+//! across implementations and languages — this is what makes
+//! "verify a Uniclaw receipt with a 200-LOC binary in any
+//! language" actually work in practice. v1 receipts (minted by
+//! pre-step-19 kernels) use `serde_json`'s default encoding for
+//! backwards compatibility; verifier dispatches on
+//! `body.schema_version`.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -18,8 +30,22 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
+pub mod canonical;
+
 /// Wire-format version. Bumped on any breaking schema change.
-pub const RECEIPT_FORMAT_VERSION: u32 = 1;
+///
+/// - **v1** (Phase 0-step-18): `serde_json`'s default JSON encoding;
+///   field order = struct declaration order. Deterministic in
+///   Rust but not portable across languages.
+/// - **v2** (Phase 3.5 / step 19+): RFC 8785 JCS. Same logical
+///   shape as v1; canonicalization is the wire change. Lexicographic
+///   key ordering, normalized number formatting, standard string
+///   escapes. Cross-language interoperable.
+///
+/// Verifier dispatches on `body.schema_version`. v1 receipts in
+/// the wild continue to verify under v1 rules; new receipts go
+/// out as v2.
+pub const RECEIPT_FORMAT_VERSION: u32 = 2;
 
 /// A 32-byte BLAKE3 digest, used for content addressing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,13 +186,45 @@ pub struct MerkleLeaf {
 impl Receipt {
     /// Compute the content-addressable id of the receipt.
     ///
-    /// The id is BLAKE3 of the canonical JSON encoding of the body.
-    /// (Content-addressing the body, not the wrapper, lets us add fields to
-    /// the wrapper later without breaking existing receipt URLs.)
+    /// The id is BLAKE3 of the canonical encoding of the body.
+    /// Canonicalization rules dispatch on `body.schema_version`:
+    ///
+    /// - v1: `serde_json`'s default JSON encoding (struct-declaration
+    ///   key order). Pre-step-19 receipts in the wild verify under
+    ///   these rules.
+    /// - v2 +: RFC 8785 JCS (lexicographic key order, normalized
+    ///   numbers, standard string escapes). Cross-language
+    ///   interoperable.
+    ///
+    /// (Content-addressing the body, not the wrapper, lets us add
+    /// fields to the wrapper later without breaking existing
+    /// receipt URLs.)
     #[must_use]
     pub fn content_id(&self) -> Digest {
-        let canonical = serde_json::to_vec(&self.body).expect("canonical body must encode");
+        let canonical = canonicalize_for_schema(&self.body);
         Digest(*blake3::hash(&canonical).as_bytes())
+    }
+}
+
+/// Dispatch a [`ReceiptBody`] through the canonicalizer matching
+/// its `schema_version`.
+///
+/// Behavior:
+/// - `schema_version <= 1` → `serde_json`'s default JSON encoding
+///   (the pre-step-19 byte format). Receipts already in the wild
+///   keep verifying.
+/// - `schema_version >= 2` → RFC 8785 JCS via [`canonical::to_vec`].
+///
+/// Both paths produce a `Vec<u8>` suitable for hashing or signing.
+pub(crate) fn canonicalize_for_schema(body: &ReceiptBody) -> Vec<u8> {
+    if body.schema_version <= 1 {
+        // Legacy path: serde_json default. We expect this to never
+        // fail on a well-formed `ReceiptBody`; the panic-on-error
+        // matches the previous behavior of `expect("canonical body
+        // must encode")`.
+        serde_json::to_vec(body).expect("legacy canonicalization must encode")
+    } else {
+        canonical::to_vec(body).expect("v2 JCS canonicalization must encode")
     }
 }
 
@@ -388,15 +446,22 @@ impl core::error::Error for VerifyError {}
 /// Ed25519 signing and verifying helpers. Enable with the `crypto` feature.
 #[cfg(any(feature = "crypto", test))]
 pub mod crypto {
-    use super::{PublicKey, RECEIPT_FORMAT_VERSION, Receipt, ReceiptBody, Signature, VerifyError};
+    use super::{
+        PublicKey, RECEIPT_FORMAT_VERSION, Receipt, ReceiptBody, Signature, VerifyError,
+        canonicalize_for_schema,
+    };
     use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 
     /// Sign a receipt body with the given Ed25519 key.
     ///
-    /// The signature covers the canonical JSON encoding of `body`.
+    /// The signature covers the canonical encoding of `body` —
+    /// either `serde_json` default (`schema_version <= 1`) or
+    /// RFC 8785 JCS (`schema_version >= 2`). Verifiers in any
+    /// language can recompute the same canonical bytes from the
+    /// receipt body's logical structure and check the signature.
     #[must_use]
     pub fn sign(body: ReceiptBody, signing_key: &SigningKey) -> Receipt {
-        let body_bytes = serde_json::to_vec(&body).expect("canonical body must encode");
+        let body_bytes = canonicalize_for_schema(&body);
         let sig = signing_key.sign(&body_bytes);
         Receipt {
             version: RECEIPT_FORMAT_VERSION,
@@ -406,19 +471,27 @@ pub mod crypto {
         }
     }
 
-    /// Verify a receipt's Ed25519 signature against its embedded issuer key.
+    /// Verify a receipt's Ed25519 signature against its embedded
+    /// issuer key.
     ///
-    /// Also checks that the wire-format version is one this build understands.
+    /// Wire-format version policy: this build understands
+    /// `RECEIPT_FORMAT_VERSION` (currently 2). Receipts with
+    /// `version <= RECEIPT_FORMAT_VERSION` verify; receipts with
+    /// a higher version are rejected with `UnsupportedVersion`
+    /// (the verifier can't know how to canonicalize a future
+    /// schema). The actual canonicalization rule is selected by
+    /// `body.schema_version` so v1 receipts continue to verify
+    /// under v1 rules (legacy `serde_json`) while v2 receipts use
+    /// JCS — both paths run in this same binary.
     pub fn verify(receipt: &Receipt) -> Result<(), VerifyError> {
-        if receipt.version != RECEIPT_FORMAT_VERSION {
+        if receipt.version > RECEIPT_FORMAT_VERSION {
             return Err(VerifyError::UnsupportedVersion {
                 found: receipt.version,
                 expected: RECEIPT_FORMAT_VERSION,
             });
         }
 
-        let body_bytes =
-            serde_json::to_vec(&receipt.body).map_err(|_| VerifyError::EncodingFailed)?;
+        let body_bytes = canonicalize_for_schema(&receipt.body);
 
         let key = VerifyingKey::from_bytes(&receipt.issuer.0)
             .map_err(|_| VerifyError::InvalidIssuerKey)?;

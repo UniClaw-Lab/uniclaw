@@ -12,6 +12,86 @@ format change history.
 
 ### Added
 
+- **Receipt Canonicalization (RFC 8785 JCS)** (Phase 3.5 / step 19)
+  — receipts at `schema_version >= 2` now use a deterministic-
+  across-languages canonical JSON encoding. The browser verifier
+  produces byte-identical output to the Rust canonicalizer for
+  every reference vector (5 of 5 pass via the Node smoke test).
+  This is the foundation for cross-language verifier
+  interoperability — per the war analysis (`UNICLAW_CLAW_WAR_ANALYSIS.md`),
+  the highest-leverage work: *"if verification is not universal,
+  Uniclaw stays a Rust project. If verification is universal,
+  Uniclaw becomes a protocol."* The receipt is now portable.
+  - **`uniclaw-receipt::canonical` module** — RFC 8785 JCS
+    implementation (~100 LOC). Goes through
+    `serde_json::to_value` for the intermediate Value tree,
+    walks emitting canonical bytes:
+    - Object keys sorted by UTF-16 code unit order.
+    - Integers as decimal (no leading zeros, no `+`, no
+      exponent). Floats panic — Uniclaw's schema has no
+      floats; the panic is a load-bearing assertion against
+      future drift.
+    - Standard string escapes (`"` → `\"`, `\\` → `\\\\`,
+      controls → `\uXXXX` lowercase, `\b\f\n\r\t` named).
+      Slash `/` is **not** escaped.
+    - No whitespace.
+    16 unit tests covering ordering, escapes, integer
+    formatting, RFC 8785 Appendix-B-style worked example,
+    determinism across construction orders.
+  - **`RECEIPT_FORMAT_VERSION` bumped 1 → 2.** New receipts
+    minted by the kernel record `schema_version: 2` and use
+    JCS. Pre-step-19 receipts (`schema_version: 1`) continue
+    to verify under the legacy `serde_json` encoding via
+    schema-version dispatch in `Receipt::content_id` /
+    `crypto::sign` / `crypto::verify`. Backwards-compatible:
+    every existing receipt verifies; new receipts verify in
+    any JCS-conformant implementation.
+  - **5 test vectors at `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`**
+    — minimal-allowed, denied-with-rule, with-provenance-edges,
+    with-redactor-stack-hash, pending-approval. Each fixture
+    pins `canonical_hex` (the canonical bytes) + `blake3_hex`
+    (the content_id). The Rust snapshot test
+    (`vectors_match_expected_canonical_and_hash`) fails any
+    change to `canonical.rs` that alters byte-level output
+    for the same logical body.
+  - **Browser verifier (`crates/uniclaw-host/src/verify.html`)**
+    updated with a JS port of the canonicalizer (~30 LOC).
+    Dispatches on `body.schema_version`: v1 receipts use the
+    pre-step-19 `JSON.stringify` path, v2 receipts use the JCS
+    JS port. Same algorithm; same output.
+  - **Node.js cross-language conformance smoke**
+    (`crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs`).
+    Loads `canonical-v2.json` and re-canonicalizes every body
+    with a JS JCS implementation matching the one in
+    `verify.html`. **5 of 5 vectors pass** — byte-identical
+    output to Rust. Run manually:
+    `node crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs`.
+    Future-step CI integration could wire this into a Node
+    setup.
+  - **RFC-0001 updated** to `Schema version: 2` with a new
+    section 0 documenting the canonicalization rules + pointing
+    to the conformance fixture as the cross-language contract.
+  - **Bench** (gitignored at
+    `bench-results/18-receipt-canonicalization.txt`):
+    `canonical::to_vec` ~36 µs/receipt (22.5 MiB/s) vs
+    `serde_json::to_vec` ~5.3 µs (151.4 MiB/s). JCS overhead
+    +30 µs/receipt (+572%). Full content_id (JCS + BLAKE3)
+    ~26 µs. Acceptable for any realistic receipt volume —
+    at 100/sec it's 0.36% of CPU. A direct serde Serializer
+    (no Value-tree round-trip) is the future-step optimisation
+    if volume ever justifies it; not on the v0 critical path.
+  - **Adopt-don't-copy citation**: RFC 8785 (Cyberphone). The
+    algorithm is small enough we wrote our own implementation
+    (~100 LOC) rather than pull a transitive crate; the
+    canonicalization correctness is load-bearing for the
+    entire receipt format.
+  - **Step doc** —
+    [`docs/steps/19-receipt-canonicalization.md`](docs/steps/19-receipt-canonicalization.md).
+  - **Phase 3.5 declared** for receipt-format hardening
+    (between Phase 3 and Phase 4). Follow-ups: `key_id`
+    field for key rotation, witness signatures + chain
+    checkpoint receipts, multi-language verifiers (Go,
+    Python, Swift).
 - **Output Sanitization / Redaction Proofs** (Phase 3 step 5 /
   step 18) — pattern-based redaction over tool outputs with
   audit-grade receipts. The kernel's audit chain now commits

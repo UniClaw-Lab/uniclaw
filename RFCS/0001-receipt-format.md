@@ -5,8 +5,23 @@
 | **Status** | Draft |
 | **Author** | Uniclaw Contributors |
 | **Created** | 2026-04-26 |
-| **Last updated** | 2026-04-26 |
-| **Schema version** | 1 |
+| **Last updated** | 2026-05-08 (v2: RFC 8785 canonicalization) |
+| **Schema version** | 2 |
+
+## 0. Canonicalization (v2 +)
+
+**Receipts at `schema_version >= 2` use [RFC 8785 JSON Canonicalization Scheme (JCS)](https://www.rfc-editor.org/rfc/rfc8785).** The canonical encoding is deterministic across implementations and languages — Rust, TypeScript, Go, Python verifiers running JCS over the same logical body produce byte-identical bytes. That property is what makes "verify a Uniclaw receipt with a small binary in any language" actually work in practice.
+
+JCS rules (summary):
+
+- **Object keys sorted by UTF-16 code unit order** (RFC 8785 §3.2.3).
+- **Number formatting per ECMA-262 §7.1.12.1.** Integers emit as decimal with no leading zeros, no `+` sign, no exponent. Uniclaw's schema has no floats; the encoder panics on any non-integer Number as a load-bearing assertion against future drift.
+- **Standard string escapes** (RFC 8785 §3.2.2): `"` → `\"`, `\\` → `\\\\`, controls (U+0000..U+001F) → `\uXXXX` lowercase, `\b` `\f` `\n` `\r` `\t` use named escapes, everything else UTF-8 verbatim. The slash `/` is **not** escaped.
+- **No whitespace.** No spaces, no newlines, no indentation.
+
+**Backwards compatibility**: Receipts with `schema_version <= 1` use the pre-step-19 `serde_json` default encoding (struct-declaration field order). Verifiers dispatch on `body.schema_version`. v1 receipts in the wild continue to verify under v1 rules; new receipts go out as v2.
+
+**Test vectors** live at [`crates/uniclaw-receipt/tests/vectors/canonical-v2.json`](../crates/uniclaw-receipt/tests/vectors/canonical-v2.json) — five representative receipt bodies with their expected canonical bytes (hex) and BLAKE3 hashes. Cross-language verifiers should pass these vectors as their conformance test; see [`tests/vectors/conformance-smoke.mjs`](../crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs) for a Node.js example proving the JS canonicalizer in `verify.html` matches the Rust output byte-for-byte (the same JCS implementation that `crates/uniclaw-host/src/verify.html` ships in the browser verifier).
 
 ## 1. Summary
 
