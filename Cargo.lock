@@ -2280,6 +2280,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "blake3",
  "clap",
  "ed25519-dalek",
@@ -2288,9 +2289,16 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "uniclaw-approval",
+ "uniclaw-constitution",
+ "uniclaw-kernel",
  "uniclaw-receipt",
+ "uniclaw-redact",
+ "uniclaw-secrets",
  "uniclaw-store",
  "uniclaw-store-sqlite",
+ "uniclaw-tools",
+ "uniclaw-tools-http",
 ]
 
 [[package]]

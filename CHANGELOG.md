@@ -12,6 +12,90 @@ format change history.
 
 ### Added
 
+- **End-to-end demo** (Phase 3.5 / step 20)
+  — one runnable artifact that wires Phase 3's complete stack
+  (kernel + constitution + budget + approval + HTTP fetch tool +
+  secret broker + redactor + canonical receipts) into one
+  command. `cargo run --release --example end-to-end-demo -p uniclaw-host`
+  walks 5 representative actions, prints 6 verifiable receipt
+  URLs, and spins up `uniclaw-host` serving every receipt at
+  `/receipts/<hash>` plus the browser verifier at `/verify`.
+  Closes **success threshold 2 (visibility)** from the deep-
+  strategy memory: a third party can run the demo, paste any
+  printed URL into `/verify`, and watch the trust property work
+  cold — no Uniclaw install required for the verifier, since
+  the JS port of JCS + `crypto.subtle.verify` runs in the
+  browser. Per the war analysis: *"the demo should be brutally
+  concrete: agent proposes risky action → constitution requires
+  approval → user approves → tool executes → secret used through
+  broker without exposing raw material → output redacted →
+  receipt chain published → third party verifies it from another
+  machine."* All seven steps in one binary.
+  - **`crates/uniclaw-host/examples/end-to-end-demo.rs`** (~580
+    LOC, intentional single-function `main` with `#[allow(clippy::too_many_lines)]`
+    — the storyline is the value, not the modularity). Five
+    actions:
+    1. **Allowed** — `http.fetch /data` against the built-in
+       mock server → signed `Allowed` receipt.
+    2. **Pending → Approved** — `http.fetch /admin/keys`
+       → constitution's `admin-requires-approval` rule fires
+       → `Pending` receipt → auto-approval with synthetic
+       `demo-operator` principal → `Approved` receipt linked
+       via `prev_hash` to the Pending.
+    3. **Denied** — `shell.exec rm -rf /` → constitution's
+       `deny-shell` rule → signed `Denied` receipt.
+    4. **`secret_used` provenance edge** — `tool.http_fetch`
+       with `BearerHeader { secret_ref: "github.token" }`
+       against `/api/me`. The broker injects the bearer at
+       call time; the kernel mints one `secret_used` edge
+       per consumed reference (name only — never the value).
+    5. **`redaction_applied` provenance edge** — `tool.http_fetch`
+       against `/api/dump` returns a body containing `ghp_demo...`.
+       The redactor decodes the base64-encoded body, scans,
+       redacts, re-encodes, and the kernel mints one
+       `redaction_applied` edge plus populates
+       `redactor_stack_hash` (was a placeholder field since
+       step 18). The receipt's `output_hash` is the post-
+       redaction form.
+  - **Built-in mock HTTP server** (~50 LOC inside the example)
+    — a detached `std::thread` listening on `127.0.0.1:0` (OS
+    picks a free port). Routes: `/data`, `/admin/keys`,
+    `/api/me` (echoes request headers including the broker-
+    injected `Authorization`), `/api/dump` (returns the leak-
+    shaped body for the redaction step). Stop-flag for graceful
+    shutdown. No real network calls; no flakiness from external
+    services. Pattern matches `crates/uniclaw-tools-http/tests/integration.rs`
+    (which we wrote ourselves — see step 14).
+  - **Deterministic Ed25519 signing key** (`SigningKey::from_bytes(&[42u8; 32])`)
+    so the demo's issuer public key is stable across runs.
+    Production uses HSM-backed signers; the demo uses a fixed
+    test key.
+  - **`HttpFetchConfig::for_test_localhost()`** disables the
+    SSRF gate — production refuses literal-IP private/loopback
+    by default; the demo's mock server lives on `127.0.0.1`,
+    so the test config is required. Documented as test-only.
+  - **Graceful shutdown** via `tokio::signal::ctrl_c()` + axum's
+    `with_graceful_shutdown`. Demo prints 6 URLs, then waits
+    for Ctrl+C.
+  - **Step doc** at `docs/steps/20-end-to-end-demo.md` — what
+    the step proves, where it fits, how it works in plain
+    words, design choices, what it doesn't ship, performance/
+    size, and the threshold-2 closure.
+  - **`uniclaw-host` Cargo.toml** dev-deps: `uniclaw-kernel`,
+    `uniclaw-constitution`, `uniclaw-approval`, `uniclaw-store`,
+    `uniclaw-tools`, `uniclaw-tools-http`, `uniclaw-secrets`,
+    `uniclaw-redact`, `base64`. Dev-only because the host crate
+    itself doesn't depend on these in production. New `[[example]]`
+    entry pins the example path.
+  - **No new crate** — workspace stays at 17 of 20 crates.
+  - **Cold start:** ~37 s release build (one-time per machine);
+    after that, the example binary starts in ~50 ms. Each demo
+    run produces 6 receipts in <100 ms before the host comes
+    up. Demo binary size: ~6 MB stripped (links wasmtime + tokio
+    + axum + ureq + everything else; this is the price of
+    "exercises all of Phase 3"). No bench file — it's a demo,
+    not a perf-sensitive component.
+
 - **Receipt Canonicalization (RFC 8785 JCS)** (Phase 3.5 / step 19)
   — receipts at `schema_version >= 2` now use a deterministic-
   across-languages canonical JSON encoding. The browser verifier

@@ -29,6 +29,19 @@ clap.workspace = true
 uniclaw-receipt = { workspace = true, features = ["crypto"] }
 ed25519-dalek = { workspace = true }
 blake3.workspace = true
+# Step 20 (end-to-end demo) example deps. The example wires the
+# whole stack — kernel + constitution + tools + secrets + redactor
+# — into one runnable artifact. Dev-only because the host crate
+# itself doesn't depend on these in production.
+uniclaw-kernel.workspace = true
+uniclaw-constitution.workspace = true
+uniclaw-approval.workspace = true
+uniclaw-store.workspace = true
+uniclaw-tools.workspace = true
+uniclaw-tools-http.workspace = true
+uniclaw-secrets.workspace = true
+uniclaw-redact.workspace = true
+base64.workspace = true
 
 [lints]
 workspace = true
@@ -36,3 +49,7 @@ workspace = true
 [[bin]]
 name = "uniclaw-host"
 path = "src/bin/uniclaw-host.rs"
+
+[[example]]
+name = "end-to-end-demo"
+path = "examples/end-to-end-demo.rs"
