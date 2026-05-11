@@ -1,0 +1,57 @@
+{
+  "name": "@uniclaw/verifier",
+  "version": "0.1.0",
+  "description": "Standalone TypeScript verifier for Uniclaw receipts. Recomputes the canonical body bytes (RFC 8785 JCS), the BLAKE3 content_id, and verifies the Ed25519 signature against the receipt's embedded issuer key. Browser + Node 20+. No native deps.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "uniclaw-verify-ts": "./bin/verify-cli.mjs"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "uniclaw",
+    "receipt",
+    "verifier",
+    "ed25519",
+    "blake3",
+    "jcs",
+    "rfc8785",
+    "audit"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UniClaw-Lab/uniclaw.git",
+    "directory": "packages/verifier-ts"
+  },
+  "license": "(MIT OR Apache-2.0)",
+  "homepage": "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/verifier-ts"
+}

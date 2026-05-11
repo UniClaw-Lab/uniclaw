@@ -119,6 +119,12 @@
   // body MUST produce identical bytes — that's what the
   // tests/vectors/canonical-v2.json fixture exists to confirm.
   //
+  // The canonical TypeScript reference lives at
+  // `packages/verifier-ts/src/canonical.ts` (npm package
+  // `@uniclaw/verifier`, step 20a). Keep these two ports in
+  // lockstep — both load the same conformance fixture, so a
+  // drift in either fails its own test suite first.
+  //
   // Scope: handles the shape Uniclaw receipts actually use
   // (string keys, integer numbers only, ASCII-mostly strings).
   // Floats throw rather than emit potentially wrong bytes, same

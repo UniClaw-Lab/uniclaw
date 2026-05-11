@@ -12,6 +12,94 @@ format change history.
 
 ### Added
 
+- **TypeScript verifier npm package — `@uniclaw/verifier`**
+  (Phase 3.5 / step 20a) — first non-Rust verifier in the repo,
+  shipping at `packages/verifier-ts/`. Workspace stays at 17 of
+  20 Rust crates (the npm package doesn't count toward the cap).
+  Per the war analysis: *"if verification is not universal,
+  Uniclaw stays a Rust project. If verification is universal,
+  Uniclaw becomes a protocol."* This PR makes verification
+  programmatically universal — closes **success threshold 1
+  (portability)** from the deep-strategy memory: a TypeScript
+  developer can `npm install` a verifier and validate a
+  Uniclaw receipt minted on a Rust kernel, with bytes matching,
+  on any platform that runs Node 20+ or a modern browser.
+  - **Package surface (~250 LOC across 6 modules):**
+    - `canonicalizeBody(body)` / `canonicalizeJcs(value)` — RFC
+      8785 JCS canonicalizer + the v1 fallback path
+      (`JSON.stringify` over a parse-order-preserved body).
+    - `computeContentIdHex(body)` / `computeContentIdBytes(body)`
+      — BLAKE3 over the canonical bytes, via `@noble/hashes`.
+    - `verifyReceipt(receipt)` / `verifyReceiptJson(json)`
+      / `verifyReceiptUrl(url)` — Ed25519 check against the
+      receipt's embedded issuer key via `@noble/curves`. Returns
+      a plain `VerifyResult` object; only catastrophic input
+      throws.
+    - TypeScript types for `Receipt`, `ReceiptBody`,
+      `ReceiptAction`, `RuleRef`, `ProvenanceEdge`,
+      `MerkleLeaf`, `VerifyResult`. Each shape uses an index
+      signature so forward-compatible schema fields don't fail
+      typecheck.
+    - ESM-only, Node 20+ floor. Browser-compatible (no
+      Node-only APIs in the verify path). Two production
+      dependencies — both audited Paul-Miller libraries with
+      no native modules and no postinstall scripts.
+  - **Tiny CLI** (`bin/verify-cli.mjs`) registered as
+    `uniclaw-verify-ts`. Accepts a URL or a local JSON file
+    path; exit code 0 on verified, 1 on failure, 2 on bad input.
+    Pairs with the step-20 demo:
+    `npx uniclaw-verify-ts http://127.0.0.1:PORT/receipts/HASH`
+    → `✓ verified | issuer=197f6b23... decision=allowed schema_v=2 content_id=a957e6e6...`.
+  - **34 tests pass** across 3 files
+    (`canonical.test.ts` + `conformance.test.ts` + `verify.test.ts`):
+    - 10 JCS primitive/string/container unit tests.
+    - **10 cross-language conformance assertions** that load
+      the SAME `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`
+      fixture the Rust snapshot test loads. All 5 vectors
+      produce byte-identical canonical output and byte-identical
+      BLAKE3 content_ids in the TS port. Same fixture is the
+      single source of truth across all three implementations
+      (Rust canonicalizer, browser verifier JS port,
+      `@uniclaw/verifier`).
+    - 13 sign+verify roundtrip + tamper-detection tests using
+      the demo's deterministic key seed (`[42u8; 32]`).
+  - **End-to-end smoke against the live demo:** ran
+    `cargo run --release --example end-to-end-demo -p uniclaw-host`,
+    fetched each of the 6 published receipts via
+    `verifyReceiptUrl`. **6 of 6 verify**; the recomputed
+    `content_id` byte-matches the URL hash for every receipt;
+    tamper test (flip `decision` field via curl + jq) correctly
+    rejected with `signature did not verify under the embedded
+    issuer key`.
+  - **Conformance test path** is the lockstep mechanism between
+    `crates/uniclaw-receipt/src/canonical.rs`,
+    `crates/uniclaw-host/src/verify.html`, and
+    `packages/verifier-ts/`. Any change to one canonicalizer
+    that alters bytes for the same logical body fails in
+    Rust's snapshot test AND in vitest. Comment added to
+    `verify.html` pointing future contributors to the npm
+    package as the canonical TypeScript reference.
+  - **Tooling additions:** `package.json` with
+    `npm run typecheck` / `npm run test` / `npm run build`;
+    `tsconfig.json` (strict + `noUncheckedIndexedAccess` +
+    `exactOptionalPropertyTypes` + `verbatimModuleSyntax`);
+    `vitest.config.ts`. Top-level `.gitignore` excludes
+    `**/node_modules/`, `packages/*/dist/`, build artifacts.
+  - **What this step does NOT ship:** `npm publish` (operations
+    task — credentials and release process belong to a separate
+    PR); a bundled `verify.html` that imports from this package
+    (keeping `verify.html` self-contained is a feature);
+    verifiers in Go / Python / Swift (queued as 19c — each
+    will conform to the same `canonical-v2.json` fixture); CI
+    integration of the conformance suite.
+  - **Performance:** not measured as a headline number — the
+    verifier is dominated by network for `verifyReceiptUrl`
+    and by Ed25519 for the verify itself (~50 ms cold via
+    `@noble/curves`). Whole vitest suite finishes in ~3.4 s.
+    Built `dist/` is ~12 KB of source; transitive install
+    including `@noble/*` is ~250 KB. No bench file — not a
+    perf-sensitive component.
+
 - **End-to-end demo** (Phase 3.5 / step 20)
   — one runnable artifact that wires Phase 3's complete stack
   (kernel + constitution + budget + approval + HTTP fetch tool +

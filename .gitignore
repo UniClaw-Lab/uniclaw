@@ -38,3 +38,10 @@ perf.data.old
 # Local artifacts
 *.log
 /scratch/
+
+# Node.js / TypeScript (packages/verifier-ts and future JS workspaces)
+**/node_modules/
+packages/*/dist/
+packages/*/.tsbuildinfo
+packages/*/coverage/
+packages/*/*.tgz
