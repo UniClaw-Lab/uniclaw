@@ -1,0 +1,51 @@
+{
+  "name": "@uniclaw/client",
+  "version": "0.1.0",
+  "description": "TypeScript client for Uniclaw's HTTP proposal API. Wraps POST /v1/proposals + POST /v1/approvals/{id}/resolve with verify-by-default (re-uses @uniclaw/verifier). Browser + Node 20+. The on-ramp for any non-Rust runtime that wants to anchor agent actions into Uniclaw receipts.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@uniclaw/verifier": "file:../verifier-ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "uniclaw",
+    "receipt",
+    "client",
+    "adapter",
+    "sdk",
+    "audit",
+    "agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UniClaw-Lab/uniclaw.git",
+    "directory": "packages/client-ts"
+  },
+  "license": "(MIT OR Apache-2.0)",
+  "homepage": "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/client-ts"
+}

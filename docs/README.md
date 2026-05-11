@@ -46,6 +46,7 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 | 20 | End-to-end Demo | Phase 3.5 | [steps/20-end-to-end-demo.md](steps/20-end-to-end-demo.md) |
 | 20a | TypeScript Verifier (`@uniclaw/verifier`) | Phase 3.5 | [steps/20a-typescript-verifier.md](steps/20a-typescript-verifier.md) |
 | 21 | HTTP Proposal API | Phase 3.5 | [steps/21-http-proposal-api.md](steps/21-http-proposal-api.md) |
+| 22 | TypeScript SDK (`@uniclaw/client`) | Phase 3.5 | [steps/22-typescript-client.md](steps/22-typescript-client.md) |
 
 > **Note:** Phase 0 (the receipt format) is foundational and ships before Phase 1 step 1, so it's labeled "Step 0" in this index. Phase 1 has 8 numbered steps. Phase 2 has 4 numbered steps (9-12). Phase 3 begins at step 13.
 

@@ -12,6 +12,83 @@ format change history.
 
 ### Added
 
+- **`@uniclaw/client` TypeScript SDK** (Phase 3.5 / step 22)
+  — new top-level `packages/client-ts/` (second JS/TS package;
+  workspace stays at 17 of 20 Rust crates). The on-ramp for any
+  non-Rust runtime that wants to anchor agent actions into
+  Uniclaw receipts: wraps the step-21 HTTP API + step-20a
+  verifier into one idiomatic TypeScript surface. **First
+  concrete cross-claw adapter ships**; OpenClaw-, NemoClaw-, or
+  any TS-runtime-style integration is now one `npm install` +
+  one `await client.evaluate(action)`.
+  - **One class, three operations, verify-by-default:**
+    - `UniclawClient.evaluate(action)` → `POST /v1/proposals`.
+      Returns a discriminated union — switch on `decision.kind`
+      ("allowed" / "denied" / "approved" / "pending") and
+      TypeScript narrows the rest. Pending decisions carry
+      `.approve(principal)` / `.deny(principal)` callbacks.
+    - `UniclawClient.resolveApproval(contentId, {principal, outcome})`
+      → `POST /v1/approvals/{id}/resolve`. Async path for when
+      the operator response arrives via Slack / email / a
+      dashboard, after the original mint's hot path is gone.
+    - `UniclawClient.verifyReceiptUrl(url)` re-exports the verify
+      path from `@uniclaw/verifier`.
+    - `UniclawClient.getReceipt(contentId)` returns the parsed
+      receipt JSON without verifying — pair with explicit
+      `verifyReceiptUrl` when you want the signature check.
+  - **Verify-by-default.** Every mint is verified locally before
+    being returned: the client fetches the full receipt, runs
+    the JCS canonicalizer + BLAKE3 + Ed25519, AND compares the
+    recomputed `content_id` against the server's claimed
+    `content_id`. If anything fails, `UniclawVerifyError` is
+    thrown. Override per-call (`{verify: false}`) or globally
+    (`new UniclawClient({verifyByDefault: false})`).
+  - **Typed errors.** `UniclawError` carries `status` (HTTP
+    code) + `code` (`"bad_request"` / `"not_found"` / `"conflict"`
+    / ...) + `detail`. `UniclawVerifyError` carries the receipt's
+    content_id + the failure reason. Callers can branch on either
+    safely.
+  - **Tests (24 total):**
+    - `tests/client.test.ts` — **17 unit tests** with a mocked
+      fetch: wire-shape conversion (camelCase ↔ snake_case),
+      decision narrowing, pending callback closures, all 4 error
+      status codes, verify opt-out, baseUrl normalization,
+      `getReceipt`.
+    - `tests/integration.test.ts` — **7 integration tests**
+      against a live `uniclaw-host` subprocess (opt-in via
+      `UNICLAW_INTEGRATION=1`). Drives Allowed / Pending →
+      Approved / Pending → Denied / Denied flows; asserts
+      chain linkage (`prev_hash` of approved equals `leaf_hash`
+      of pending); 4xx/5xx error surfacing. **Includes a tamper
+      test** that intercepts the `GET /receipts/<hash>`
+      response, mutates one field of the body, and confirms
+      `verify-by-default` rejects with `UniclawVerifyError`
+      before the caller sees the decision.
+  - **Bench (gitignored at `bench-results/22-typescript-client.txt`):**
+    - `client.evaluate verify=true`  — **19.3 ms/req**
+    - `client.evaluate verify=false` — **3.75 ms/req**
+    - raw fetch baseline             — **3.48 ms/req**
+    - **Client overhead vs raw fetch: 0.27 ms/req (~8%)** —
+      essentially free.
+    - **Verify overhead: 15.6 ms/req** — one extra `GET
+      /receipts/<hash>` + JCS/BLAKE3/Ed25519. Acceptable for a
+      "trust property guaranteed" default; a future PR could
+      extend step 21 to return the full Receipt in the propose
+      response and roughly halve the verify=true cost.
+  - **Two dependencies, both from the existing ecosystem:**
+    `@uniclaw/verifier` (workspace local; brings in
+    `@noble/curves` + `@noble/hashes` transitively). No new
+    surface to audit.
+  - **What this step does NOT ship:** support for the
+    tool-execution / secret-use / redaction endpoints (waiting
+    on step-21 extensions); auth headers (the wire format
+    doesn't take any yet); a streaming approval-wait endpoint;
+    `npm publish` (operations); a worked OpenClaw / NemoClaw
+    integration demo (queued as a separate step that exercises
+    this client against a real agent flow); Python / Go / Swift
+    siblings (queued as steps 22a / 22b / 22c — each conforms to
+    the same wire format).
+
 - **HTTP proposal API on `uniclaw-host`** (Phase 3.5 / step 21)
   — opt-in proposal/approval surface that mounts at `/v1` when the
   binary is started with `--constitution <path>`. Ships the
