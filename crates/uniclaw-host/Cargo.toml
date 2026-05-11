@@ -13,9 +13,17 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-uniclaw-receipt.workspace = true
+uniclaw-receipt = { workspace = true, features = ["crypto"] }
 uniclaw-store.workspace = true
 uniclaw-store-sqlite.workspace = true
+# Step 21 (HTTP proposal API). Used by `uniclaw_host::api` when the
+# server is run with `--constitution`. The kernel mints receipts in
+# response to `POST /v1/proposals` and `POST /v1/approvals/...`;
+# the read-only routes (step 9) don't touch these.
+uniclaw-kernel.workspace = true
+uniclaw-constitution.workspace = true
+uniclaw-approval.workspace = true
+ed25519-dalek.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum.workspace = true
@@ -26,17 +34,11 @@ anyhow.workspace = true
 clap.workspace = true
 
 [dev-dependencies]
-uniclaw-receipt = { workspace = true, features = ["crypto"] }
-ed25519-dalek = { workspace = true }
 blake3.workspace = true
 # Step 20 (end-to-end demo) example deps. The example wires the
 # whole stack — kernel + constitution + tools + secrets + redactor
-# — into one runnable artifact. Dev-only because the host crate
-# itself doesn't depend on these in production.
-uniclaw-kernel.workspace = true
-uniclaw-constitution.workspace = true
-uniclaw-approval.workspace = true
-uniclaw-store.workspace = true
+# — into one runnable artifact. The first four are also production
+# deps (above) since step 21; the last five remain dev-only.
 uniclaw-tools.workspace = true
 uniclaw-tools-http.workspace = true
 uniclaw-secrets.workspace = true

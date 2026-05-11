@@ -50,6 +50,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod api;
+pub mod clock;
+pub mod signer;
+
 use std::sync::Arc;
 
 use axum::Router;
@@ -63,6 +67,10 @@ use tower_http::cors::CorsLayer;
 
 use uniclaw_receipt::{Digest, HexDecodeError};
 use uniclaw_store::ReceiptLog;
+
+pub use crate::api::{ApiKernel, ApiState};
+pub use crate::clock::SystemClock;
+pub use crate::signer::Ed25519Signer;
 
 /// Shared application state passed into every handler.
 ///

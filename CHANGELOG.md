@@ -12,6 +12,95 @@ format change history.
 
 ### Added
 
+- **HTTP proposal API on `uniclaw-host`** (Phase 3.5 / step 21)
+  — opt-in proposal/approval surface that mounts at `/v1` when the
+  binary is started with `--constitution <path>`. Ships the
+  **threshold-3 lever** from the deep-strategy memory: any language
+  that speaks HTTP can now produce verifiable Uniclaw receipts via
+  the local-sidecar integration pattern from the war analysis — no
+  Rust toolchain, no kernel embedding required. Pairs with
+  `@uniclaw/verifier` (step 20a) to give every non-Rust claw both
+  the production path (sidecar mints) and the consumption path
+  (TS verifier validates).
+  - **Endpoints (this PR):**
+    - `POST /v1/proposals` — submit `{action: {kind, target, input_hash}}`,
+      receive `{decision, content_id, receipt_url, issuer, sequence,
+      schema_version}`. Mints an `evaluate_proposal` receipt
+      through the kernel's Constitution + Budget pipeline.
+    - `POST /v1/approvals/{content_id}/resolve` — submit
+      `{principal, outcome}`, receive a resolution receipt linked
+      to the pending one via the kernel's `ResolveApproval` flow.
+      Re-runs every authenticity gate (signature verify, issuer
+      match, decision-is-Pending, action match).
+    - Read-only routes (`/receipts/<hash>`, `/verify`, `/healthz`,
+      `/`) are unchanged.
+  - **`crates/uniclaw-host/src/api.rs`** (~370 LOC) — `ApiState`
+    (concrete `Kernel<Ed25519Signer, SystemClock, InMemoryConstitution>`
+    + shared `Arc<RwLock<InMemoryReceiptLog>>` with the read-only
+    routes), `api_router()`, handlers, `ApiError → IntoResponse`
+    mapping (400/404/409/500).
+  - **`crates/uniclaw-host/src/signer.rs`** — reusable
+    `Ed25519Signer` wrapper around `ed25519_dalek::SigningKey`
+    implementing the kernel's `Signer` trait. Extracted from the
+    end-to-end demo so future binaries don't redefine it.
+  - **`crates/uniclaw-host/src/clock.rs`** — `SystemClock`
+    (production wall-clock) + `StubClock` (deterministic, tests),
+    both emitting RFC 3339 UTC seconds (`YYYY-MM-DDTHH:MM:SSZ`)
+    via an inline `civil_from_days` formatter (Howard Hinnant's
+    public-domain algorithm; no external date dependency).
+  - **`bin/uniclaw-host.rs`** gains `--constitution <path>`,
+    `--signer-seed-hex <64-hex>`. Presence of `--constitution`
+    enables proposal mode; absence preserves the prior step-9
+    read-only behavior. A startup `WARN` flags that `/v1` is
+    unauthenticated.
+  - **`uniclaw-kernel` / `uniclaw-constitution` / `uniclaw-approval`
+    / `ed25519-dalek` move from dev-deps to regular deps** in
+    `uniclaw-host`. The end-to-end demo's remaining dev-deps
+    (`uniclaw-tools` / `uniclaw-tools-http` / `uniclaw-secrets` /
+    `uniclaw-redact` / `base64`) stay dev-only.
+  - **Concurrency:** `kernel: std::sync::Mutex<...>` (short, sync
+    critical section; no `.await` inside) + `log:
+    Arc<tokio::sync::RwLock<...>>` (shared with read-only routes,
+    async multi-reader). Lock order: kernel → log; never the
+    reverse.
+  - **Tests:** 11 new integration tests in
+    `crates/uniclaw-host/tests/api.rs` covering happy paths
+    (allowed / denied / pending → approved / pending → denied),
+    error paths (malformed JSON / bad hex / unknown content_id /
+    resolving an Allowed receipt → 409), and chain linkage
+    (sequence increments + `prev_hash` links across three
+    sequential proposals). 5 new clock unit tests pin RFC 3339
+    output for epoch / 2000-01-01 / 2026-05-09 / 2099-12-31 /
+    1969-12-31 plus assert `SystemClock` emits 20-char
+    well-formed strings.
+  - **End-to-end cross-language smoke against the live binary.**
+    Ran `target/release/uniclaw-host --constitution ... --signer-seed-hex
+    2a*32 --bind 127.0.0.1:0`, submitted Allowed / Pending /
+    Approved / Denied via curl, then verified each receipt URL via
+    `node bin/verify-cli.mjs`. 4 of 4 verify; tamper test (flip
+    `decision` via curl + jq) correctly rejected with `signature
+    did not verify under the embedded issuer key`. The 4 status
+    code paths (200/400/404/409) all return the expected `{"error",
+    "detail"}` shape.
+  - **Bench (gitignored at `bench-results/21-http-proposal-api.txt`):**
+    `POST /v1/proposals` over HTTP keepalive (Python urllib, N=500
+    sequential): **4.218 ms/req**. curl-per-request (N=100,
+    fresh TCP each time): 29.96 ms/req — dominated by curl
+    process startup. Baseline for direct `Kernel::handle` is
+    ~45 µs (step 19); the HTTP API adds ~4.17 ms overhead, well
+    within "human time" for any realistic agent action. Local-
+    sidecar latency is not a concern.
+  - **What this step does NOT ship:** tool-execution / secret-use /
+    redaction endpoints (each carries security-sensitive payloads
+    needing a dedicated design pass); authentication (the
+    `principal` field is accepted in the wire format for forward-
+    compatibility but not yet recorded — Phase-6 identity-bound
+    approvals); persistent storage in proposal mode (restart resets
+    the chain; SQLite proposal mode is a future-step);
+    chain-checkpoint endpoint (queued as step 19c); first-party
+    client SDK in TS/Python/Go (the endpoints are simple enough
+    that any HTTP client works).
+
 - **TypeScript verifier npm package — `@uniclaw/verifier`**
   (Phase 3.5 / step 20a) — first non-Rust verifier in the repo,
   shipping at `packages/verifier-ts/`. Workspace stays at 17 of

@@ -1,0 +1,404 @@
+//! HTTP proposal + approval API (step 21).
+//!
+//! Mounted at `/v1` by [`crate::api_router`] when the host is started
+//! with a constitution. The endpoints expose the kernel's
+//! `EvaluateProposal` and `ResolveApproval` paths over HTTP, so any
+//! claw (`OpenClaw`, `NemoClaw`, `NanoClaw`, etc.) can integrate via
+//! the "local sidecar" pattern from the war analysis without
+//! embedding the Rust kernel.
+//!
+//! ## Endpoints
+//!
+//! | Method | Path                                  | Mints                          |
+//! |--------|---------------------------------------|---------------------------------|
+//! | POST   | `/v1/proposals`                       | `evaluate_proposal` receipt     |
+//! | POST   | `/v1/approvals/{content_id}/resolve`  | `resolve_approval` receipt      |
+//!
+//! Receipts produced here flow into the same in-memory log the
+//! read-only routes (`/receipts/<hash>`, step 9) serve from, so a
+//! client can immediately fetch any minted receipt by `content_id`.
+//!
+//! ## Trust model
+//!
+//! There is **no authentication** in this PR. The API is intended to
+//! be reachable only from a trusted caller on the same host
+//! (loopback / unix socket / private network segment). Operators
+//! exposing it on a routable interface MUST add their own
+//! authentication layer (reverse proxy with bearer token / mTLS).
+//! A future step adds first-class bearer-token auth configured at
+//! startup.
+//!
+//! ## Out of scope (queued)
+//!
+//! - `POST /v1/tool-executions` — record a tool execution with
+//!   optional `secret_used` + `redaction_applied` edges. The
+//!   redaction side of the wire format needs a careful design pass.
+//! - `POST /v1/secret-uses` — standalone secret-use events.
+//! - `POST /v1/redactions` — standalone redaction events.
+//! - `POST /v1/checkpoints` — `$kernel/chain/checkpointed` receipts
+//!   (step 19c).
+//! - Auth.
+
+use std::sync::{Arc, Mutex};
+
+use axum::Json;
+use axum::Router;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+
+use uniclaw_approval::ApprovalDecision;
+use uniclaw_constitution::InMemoryConstitution;
+use uniclaw_kernel::{Approval, Kernel, KernelError, KernelEvent, Proposal};
+use uniclaw_receipt::{Action, Decision, Digest, HexDecodeError, Receipt};
+use uniclaw_store::{InMemoryReceiptLog, ReceiptLog};
+
+use crate::clock::SystemClock;
+use crate::signer::Ed25519Signer;
+
+/// Concrete kernel type used by the HTTP API.
+///
+/// The kernel itself is generic; binding it to one tuple here keeps
+/// the `ApiState` non-generic so axum's state extractor stays simple
+/// and dyn-dispatch is unnecessary. Future deployments wanting a
+/// different signer (HSM) or constitution implementation will add a
+/// new alias rather than parameterizing every handler.
+pub type ApiKernel = Kernel<Ed25519Signer, SystemClock, InMemoryConstitution>;
+
+/// State shared by the proposal + approval handlers, *and* the
+/// read-only route handlers (step 9) when both are mounted on the
+/// same server.
+///
+/// - `kernel` is wrapped in a `std::sync::Mutex` because the
+///   critical section is short and synchronous — the handler calls
+///   `Kernel::handle` and never `.await`s while holding the lock.
+///   Std-mutex is the correct primitive for that shape.
+/// - `log` reuses the same `tokio::sync::RwLock<InMemoryReceiptLog>`
+///   the read-only `router(log)` consumes. The API takes a write
+///   lock around `append`; the read-only routes take a read lock
+///   around `get_by_id`. Sharing the lock makes minted receipts
+///   immediately fetchable at `/receipts/<hash>`.
+#[derive(Debug)]
+pub struct ApiState {
+    pub kernel: Mutex<ApiKernel>,
+    pub log: Arc<RwLock<InMemoryReceiptLog>>,
+}
+
+impl ApiState {
+    /// Wire a kernel + shared log into an Arc-wrapped state.
+    #[must_use]
+    pub fn new(kernel: ApiKernel, log: Arc<RwLock<InMemoryReceiptLog>>) -> Arc<Self> {
+        Arc::new(Self {
+            kernel: Mutex::new(kernel),
+            log,
+        })
+    }
+}
+
+/// Build the `/v1` axum router. The caller composes this with the
+/// read-only router via `Router::merge` to expose both surfaces on
+/// the same listener.
+pub fn api_router(state: Arc<ApiState>) -> Router {
+    Router::new()
+        .route("/v1/proposals", post(post_proposal))
+        .route(
+            "/v1/approvals/:content_id/resolve",
+            post(post_resolve_approval),
+        )
+        .with_state(state)
+}
+
+// ---------------------------------------------------------------------
+// Wire shapes
+// ---------------------------------------------------------------------
+
+/// `POST /v1/proposals` request body.
+///
+/// Just the action — the kernel applies the constitution + budget
+/// pipeline. Pre-existing constitution rules / provenance edges
+/// from upstream callers are not yet accepted; that's a future
+/// expansion.
+#[derive(Debug, Deserialize)]
+pub struct ProposeRequest {
+    pub action: ActionWire,
+}
+
+/// Action wire shape. Mirrors `uniclaw_receipt::Action` but uses
+/// a hex-string `input_hash` so plain JSON clients (TS, Python, Go,
+/// curl) can populate it without thinking about byte arrays.
+#[derive(Debug, Deserialize)]
+pub struct ActionWire {
+    pub kind: String,
+    pub target: String,
+    pub input_hash: String,
+}
+
+/// Response body for both `/v1/proposals` and `/v1/approvals/.../resolve`.
+///
+/// The receipt itself is content-addressed and immediately fetchable
+/// at `receipt_url`, but for callers that don't want to round-trip
+/// the URL we also embed the recomputable fields (`decision`,
+/// `content_id`, `issuer`, `sequence`, `schema_version`).
+#[derive(Debug, Serialize)]
+pub struct ReceiptResponse {
+    pub decision: String,
+    pub content_id: String,
+    pub receipt_url: String,
+    pub issuer: String,
+    pub sequence: u64,
+    pub schema_version: u32,
+}
+
+/// `POST /v1/approvals/{content_id}/resolve` request body.
+///
+/// `principal` is the named operator/identity authorizing the
+/// decision. It is accepted in the wire format now so adapters
+/// don't have to change shape later, but is **not** recorded in the
+/// receipt today — the current `ResolveApproval` flow uses the
+/// kernel's signer as the implicit principal. Identity-bound
+/// approvals are a future step (Phase 6 governance).
+#[derive(Debug, Deserialize)]
+pub struct ResolveApprovalRequest {
+    pub principal: String,
+    pub outcome: ResolveOutcome,
+}
+
+/// Caller's decision on a pending receipt.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolveOutcome {
+    Approved,
+    Denied,
+}
+
+impl From<ResolveOutcome> for ApprovalDecision {
+    fn from(o: ResolveOutcome) -> Self {
+        match o {
+            ResolveOutcome::Approved => Self::Approved,
+            ResolveOutcome::Denied => Self::Denied,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Error mapping
+// ---------------------------------------------------------------------
+
+/// API error type. Implements `IntoResponse` to control status codes
+/// and the JSON body shape returned to callers.
+#[derive(Debug)]
+pub enum ApiError {
+    /// Bad request shape (invalid JSON, malformed hex, etc.).
+    BadRequest(String),
+    /// Referenced `content_id` is not in the log.
+    NotFound(String),
+    /// Approval target exists but is not in `Pending` state, or the
+    /// kernel rejected the resolve event for some other authenticity
+    /// reason.
+    Conflict(String),
+    /// Internal failure — should not happen under valid input.
+    Internal(String),
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorBody {
+    error: &'static str,
+    detail: String,
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (status, code, detail) = match self {
+            Self::BadRequest(d) => (StatusCode::BAD_REQUEST, "bad_request", d),
+            Self::NotFound(d) => (StatusCode::NOT_FOUND, "not_found", d),
+            Self::Conflict(d) => (StatusCode::CONFLICT, "conflict", d),
+            Self::Internal(d) => (StatusCode::INTERNAL_SERVER_ERROR, "internal", d),
+        };
+        (
+            status,
+            Json(ErrorBody {
+                error: code,
+                detail,
+            }),
+        )
+            .into_response()
+    }
+}
+
+// ---------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------
+
+/// `POST /v1/proposals`
+///
+/// Submit an action; receive a signed receipt. The kernel runs the
+/// constitution + budget pipeline (budget enforcement is currently
+/// not configurable through the API; all proposals are "unbounded"
+/// — the kernel never charges a lease). The minted receipt is
+/// immediately appended to the log and fetchable at `receipt_url`.
+pub async fn post_proposal(
+    State(state): State<Arc<ApiState>>,
+    Json(req): Json<ProposeRequest>,
+) -> Result<Json<ReceiptResponse>, ApiError> {
+    let action = parse_action(req.action)?;
+    let proposal = Proposal::unbounded(action, Decision::Allowed, Vec::new(), Vec::new());
+    let event = KernelEvent::evaluate(proposal);
+
+    let receipt = handle_event(&state, event).await?;
+    Ok(Json(receipt_response(&receipt)))
+}
+
+/// `POST /v1/approvals/{content_id}/resolve`
+///
+/// Resolve a pending receipt. The kernel re-verifies the pending
+/// receipt's signature and decision before honoring the resolve;
+/// see `Kernel::handle_resolve_approval` for the gate.
+pub async fn post_resolve_approval(
+    State(state): State<Arc<ApiState>>,
+    Path(content_id): Path<String>,
+    Json(req): Json<ResolveApprovalRequest>,
+) -> Result<Json<ReceiptResponse>, ApiError> {
+    let digest = parse_digest(&content_id, "content_id")?;
+
+    // Look up the pending receipt in the log. A 404 here means the
+    // caller asked us to resolve something this kernel never minted.
+    let pending = {
+        let log = state.log.read().await;
+        log.get_by_id(&digest)
+            .ok_or_else(|| ApiError::NotFound(format!("no receipt with content_id {content_id}")))?
+    };
+
+    // Reject up-front if it isn't actually a Pending receipt — the
+    // kernel would also reject, but we can return a clearer error.
+    if pending.body.decision != Decision::Pending {
+        return Err(ApiError::Conflict(format!(
+            "receipt {content_id} is in state {:?}, not Pending",
+            pending.body.decision
+        )));
+    }
+
+    // Reconstruct the original proposal from the pending receipt's
+    // body. The action survives intact; constitution_rules and
+    // provenance are carried forward. The kernel re-runs the
+    // resolve-time authenticity checks regardless.
+    let original_proposal = Proposal::unbounded(
+        pending.body.action.clone(),
+        Decision::Pending,
+        pending.body.constitution_rules.clone(),
+        pending.body.provenance.clone(),
+    );
+    // `principal` is captured in the request but not yet propagated
+    // into the receipt — identity-bound approvals are a future step.
+    let _ = req.principal;
+
+    let approval = Approval {
+        pending_receipt: pending,
+        original_proposal,
+        response: req.outcome.into(),
+    };
+    let event = KernelEvent::resolve(approval);
+
+    let receipt = handle_event(&state, event).await?;
+    Ok(Json(receipt_response(&receipt)))
+}
+
+// ---------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------
+
+/// Drive a `KernelEvent` through the kernel + append the resulting
+/// receipt to the log. Returns the receipt itself so the handler can
+/// build the response.
+///
+/// Lock order: `kernel` (sync) → `log` (async). The kernel lock is
+/// released before we await the log write lock; nothing else holds
+/// the log lock for long enough to matter.
+async fn handle_event(state: &ApiState, event: KernelEvent) -> Result<Receipt, ApiError> {
+    // Step 1: drive the kernel under its sync mutex. Critical
+    // section is bounded by `Kernel::handle`, which doesn't await
+    // or block on external I/O.
+    let outcome = {
+        let mut kernel = state
+            .kernel
+            .lock()
+            .map_err(|e| ApiError::Internal(format!("kernel lock poisoned: {e}")))?;
+        kernel.handle(event).map_err(map_kernel_error)?
+    };
+
+    // Step 2: append the minted receipt under the async write lock
+    // shared with the read-only `/receipts/<hash>` handler.
+    let mut log = state.log.write().await;
+    log.append(outcome.receipt.clone())
+        .map_err(|e| ApiError::Internal(format!("log append: {e:?}")))?;
+    Ok(outcome.receipt)
+}
+
+fn map_kernel_error(e: KernelError) -> ApiError {
+    // Authenticity-rejection cases produce a 409 because they describe
+    // a state mismatch between caller and kernel (e.g. the caller
+    // tried to resolve a non-Pending receipt). Other internal kernel
+    // errors get 500.
+    match e {
+        KernelError::ResolveApprovalRejected(r) => {
+            ApiError::Conflict(format!("approval rejected: {r:?}"))
+        }
+        KernelError::RecordToolExecutionRejected(r) => {
+            ApiError::Conflict(format!("tool execution rejected: {r:?}"))
+        }
+    }
+}
+
+fn parse_action(wire: ActionWire) -> Result<Action, ApiError> {
+    let input_hash = parse_digest(&wire.input_hash, "action.input_hash")?;
+    Ok(Action {
+        kind: wire.kind,
+        target: wire.target,
+        input_hash,
+    })
+}
+
+fn parse_digest(s: &str, field: &str) -> Result<Digest, ApiError> {
+    Digest::from_hex(s).map_err(|e| {
+        let detail = match e {
+            HexDecodeError::InvalidLength { expected, got } => {
+                format!("{field}: expected {expected} hex chars, got {got}")
+            }
+            HexDecodeError::InvalidCharacter => format!("{field}: non-hex character"),
+        };
+        ApiError::BadRequest(detail)
+    })
+}
+
+fn receipt_response(r: &Receipt) -> ReceiptResponse {
+    let id = r.content_id();
+    let id_hex = id.to_hex();
+    ReceiptResponse {
+        decision: decision_str(r.body.decision).to_string(),
+        receipt_url: format!("/receipts/{id_hex}"),
+        content_id: id_hex,
+        issuer: hex32(&r.issuer.0),
+        sequence: r.body.merkle_leaf.sequence,
+        schema_version: r.body.schema_version,
+    }
+}
+
+fn decision_str(d: Decision) -> &'static str {
+    match d {
+        Decision::Allowed => "allowed",
+        Decision::Denied => "denied",
+        Decision::Approved => "approved",
+        Decision::Pending => "pending",
+    }
+}
+
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}

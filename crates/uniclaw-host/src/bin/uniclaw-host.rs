@@ -1,5 +1,7 @@
 //! `uniclaw-host` — small server that serves Uniclaw receipts.
 //!
+//! ## Read-only mode (default, since step 9)
+//!
 //! Two backends:
 //!
 //! - **`--db <path>`** (recommended): persistent `SqliteReceiptLog`. Survives
@@ -11,17 +13,33 @@
 //!   `InMemoryReceiptLog`. Good for demos and tests; loses everything on
 //!   restart.
 //!
-//! Both modes serve the same axum router from `uniclaw-host` (lib).
+//! ## Proposal-API mode (step 21)
+//!
+//! When `--constitution <path>` is passed, the server additionally
+//! mounts the `/v1/proposals` + `/v1/approvals/{id}/resolve` endpoints
+//! backed by an in-memory kernel + log. Proposals submitted over HTTP
+//! are evaluated and minted on the spot; the resulting receipts are
+//! immediately fetchable via the standard `/receipts/<hash>` route.
+//! The signing key is loaded from `--signer-seed-hex` (32-byte hex
+//! seed; dev-only) — production deployments must add an HSM-backed
+//! signer in a future step. There is **no authentication** in front
+//! of `/v1` today; expose only on loopback / a trusted segment.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use axum::Router;
 use clap::{ArgGroup, Parser};
 use tokio::sync::RwLock;
 
+use uniclaw_constitution::parse_toml;
+use uniclaw_host::api::{ApiState, api_router};
+use uniclaw_host::clock::SystemClock;
 use uniclaw_host::router;
+use uniclaw_host::signer::Ed25519Signer;
+use uniclaw_kernel::Signer;
 use uniclaw_receipt::{PublicKey, Receipt};
 use uniclaw_store::{InMemoryReceiptLog, ReceiptLog};
 use uniclaw_store_sqlite::SqliteReceiptLog;
@@ -40,6 +58,10 @@ use uniclaw_store_sqlite::SqliteReceiptLog;
 struct Args {
     /// Persistent SQLite-backed receipt log. Survives restarts.
     /// On first run set `UNICLAW_HOST_ISSUER=<64-hex>` to pin the log.
+    ///
+    /// **Cannot be combined with `--constitution`** — the proposal
+    /// API uses an in-memory log so the kernel can append directly.
+    /// Persistence for proposal mode is a future-step.
     #[arg(long)]
     db: Option<PathBuf>,
 
@@ -50,21 +72,47 @@ struct Args {
     /// Address to bind the HTTP listener on.
     #[arg(long, default_value = "127.0.0.1:8787")]
     bind: SocketAddr,
+
+    /// Enable proposal-API mode by loading a constitution from a
+    /// TOML file. When present, the `/v1/proposals` and
+    /// `/v1/approvals/{id}/resolve` endpoints are mounted; the
+    /// kernel that backs them uses this constitution to decide each
+    /// proposal.
+    ///
+    /// **Has no authentication.** Bind to loopback (`127.0.0.1`) or
+    /// a private interface. A future step adds bearer-token auth.
+    #[arg(long)]
+    constitution: Option<PathBuf>,
+
+    /// 32-byte seed hex (64 chars) for the dev signing key. Required
+    /// when `--constitution` is provided. Production must replace
+    /// this with an HSM-backed signer (future step).
+    #[arg(long)]
+    signer_seed_hex: Option<String>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    if let Some(db_path) = args.db.as_deref() {
+    if let Some(c_path) = args.constitution.as_deref() {
+        if args.db.is_some() {
+            bail!(
+                "--constitution is incompatible with --db: \
+                 proposal mode uses an in-memory log; persistent storage \
+                 for minted receipts is a future-step",
+            );
+        }
+        run_proposal_mode(c_path, &args).await
+    } else if let Some(db_path) = args.db.as_deref() {
         let issuer = read_or_require_issuer(db_path)?;
         let log = SqliteReceiptLog::open(db_path, issuer)
             .with_context(|| format!("opening SQLite log at {}", db_path.display()))?;
-        serve("sqlite", db_path.display().to_string(), args.bind, log).await
+        serve_readonly("sqlite", db_path.display().to_string(), args.bind, log).await
     } else {
         let log = load_receipts_dir(&args.receipts_dir)
             .with_context(|| format!("loading receipts from {}", args.receipts_dir.display()))?;
-        serve(
+        serve_readonly(
             "in-memory",
             args.receipts_dir.display().to_string(),
             args.bind,
@@ -74,7 +122,58 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn serve<L>(backend: &str, source: String, bind: SocketAddr, log: L) -> Result<()>
+async fn run_proposal_mode(c_path: &Path, args: &Args) -> Result<()> {
+    // --- Build the signer ---
+    let seed_hex = args
+        .signer_seed_hex
+        .as_deref()
+        .context("--constitution requires --signer-seed-hex (dev key, 64 hex chars)")?;
+    let seed_digest = uniclaw_receipt::Digest::from_hex(seed_hex)
+        .context("--signer-seed-hex must be 64 hex characters")?;
+    let signer = Ed25519Signer::from_seed(&seed_digest.0);
+    let issuer = signer.public_key();
+
+    // --- Load the constitution ---
+    let toml_src = std::fs::read_to_string(c_path)
+        .with_context(|| format!("reading constitution {}", c_path.display()))?;
+    let constitution = parse_toml(&toml_src)
+        .with_context(|| format!("parsing constitution {}", c_path.display()))?;
+
+    // --- Wire kernel + shared log ---
+    let kernel = uniclaw_kernel::Kernel::new(signer, SystemClock, constitution);
+    let log = Arc::new(RwLock::new(InMemoryReceiptLog::new(issuer)));
+    let state = ApiState::new(kernel, log.clone());
+
+    // --- Build merged router ---
+    let api = api_router(state);
+    let readonly = router(log.clone());
+    let app: Router = readonly.merge(api);
+
+    let listener = tokio::net::TcpListener::bind(args.bind).await?;
+    let local = listener.local_addr()?;
+    let issuer_prefix = issuer_prefix(&issuer);
+
+    eprintln!(
+        "uniclaw-host: backend=in-memory constitution={} \
+         (issuer {issuer_prefix}…) listening on http://{local}",
+        c_path.display(),
+    );
+    eprintln!(
+        "uniclaw-host: WARN /v1 proposal API is unauthenticated — \
+         keep this bound to loopback or a trusted network segment.",
+    );
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+            eprintln!("uniclaw-host: shutting down");
+        })
+        .await?;
+
+    Ok(())
+}
+
+async fn serve_readonly<L>(backend: &str, source: String, bind: SocketAddr, log: L) -> Result<()>
 where
     L: ReceiptLog + Send + Sync + 'static,
 {
@@ -84,15 +183,8 @@ where
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let local = listener.local_addr()?;
+    let issuer_prefix = issuer_prefix(&issuer);
 
-    let issuer_prefix = {
-        let mut s = String::with_capacity(8);
-        for b in &issuer.0[0..4] {
-            use std::fmt::Write;
-            let _ = write!(s, "{b:02x}");
-        }
-        s
-    };
     eprintln!(
         "uniclaw-host: backend={backend} source={source} \
          serving {count} receipt(s) (issuer {issuer_prefix}…) on http://{local}"
@@ -106,6 +198,15 @@ where
         .await?;
 
     Ok(())
+}
+
+fn issuer_prefix(issuer: &PublicKey) -> String {
+    let mut s = String::with_capacity(8);
+    for b in &issuer.0[0..4] {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Resolve the issuer for a SQLite-backed log:
