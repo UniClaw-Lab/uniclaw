@@ -378,6 +378,176 @@ describe("UniclawClient.resolveApproval — direct path", () => {
   });
 });
 
+describe("UniclawClient.recordToolExecution — wire shape", () => {
+  const ALLOWED_ID = "f".repeat(64);
+  const TE_RESP = {
+    decision: "allowed",
+    content_id: "9".repeat(64),
+    receipt_url: `/receipts/${"9".repeat(64)}`,
+    issuer: "b".repeat(64),
+    sequence: 4,
+    schema_version: 2,
+  };
+
+  it("posts to /v1/tool-executions with minimum success shape", async () => {
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const r = await client.recordToolExecution({
+      allowedReceiptId: ALLOWED_ID,
+      outputHash: "11".repeat(32),
+    });
+    expect(r.kind).toBe("allowed");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toEqual({
+      allowed_receipt_id: ALLOWED_ID,
+      output_hash: "11".repeat(32),
+    });
+  });
+
+  it("includes secrets_used only when non-empty", async () => {
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await client.recordToolExecution({
+      allowedReceiptId: ALLOWED_ID,
+      outputHash: "11".repeat(32),
+      secretsUsed: ["github.token", "slack.webhook"],
+    });
+    expect(calls[0]!.body).toEqual({
+      allowed_receipt_id: ALLOWED_ID,
+      output_hash: "11".repeat(32),
+      secrets_used: ["github.token", "slack.webhook"],
+    });
+  });
+
+  it("omits secrets_used when explicitly empty", async () => {
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await client.recordToolExecution({
+      allowedReceiptId: ALLOWED_ID,
+      outputHash: "11".repeat(32),
+      secretsUsed: [],
+    });
+    // Empty list is omitted (smaller wire body; the server's
+    // #[serde(default)] makes either form equivalent).
+    expect(calls[0]!.body).toEqual({
+      allowed_receipt_id: ALLOWED_ID,
+      output_hash: "11".repeat(32),
+    });
+  });
+
+  it("camelCases the redaction shape on the wire", async () => {
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await client.recordToolExecution({
+      allowedReceiptId: ALLOWED_ID,
+      outputHash: "11".repeat(32),
+      redaction: {
+        redactedOutputHash: "22".repeat(32),
+        stackHash: "33".repeat(32),
+        matches: [{ ruleId: "github_pat", count: 1 }],
+      },
+    });
+    expect(calls[0]!.body).toEqual({
+      allowed_receipt_id: ALLOWED_ID,
+      output_hash: "11".repeat(32),
+      redaction: {
+        redacted_output_hash: "22".repeat(32),
+        stack_hash: "33".repeat(32),
+        matches: [{ rule_id: "github_pat", count: 1 }],
+      },
+    });
+  });
+
+  it("sends the failure shape when error is set", async () => {
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await client.recordToolExecution({
+      allowedReceiptId: ALLOWED_ID,
+      error: "connection refused",
+    });
+    expect(calls[0]!.body).toEqual({
+      allowed_receipt_id: ALLOWED_ID,
+      error: "connection refused",
+    });
+  });
+
+  it("surfaces 400 from the server", async () => {
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({
+        status: 400,
+        body: {
+          error: "bad_request",
+          detail: "exactly one of output_hash or error must be set",
+        },
+      }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await expect(
+      client.recordToolExecution({ allowedReceiptId: ALLOWED_ID }),
+    ).rejects.toMatchObject({ status: 400, code: "bad_request" });
+  });
+
+  it("surfaces 404 from the server", async () => {
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({
+        status: 404,
+        body: { error: "not_found", detail: "no receipt with content_id ..." },
+      }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await expect(
+      client.recordToolExecution({
+        allowedReceiptId: ALLOWED_ID,
+        outputHash: "11".repeat(32),
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("surfaces 409 from the server", async () => {
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({
+        status: 409,
+        body: {
+          error: "conflict",
+          detail: "receipt ... action.kind \"http.fetch\" does not start with \"tool.\"",
+        },
+      }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await expect(
+      client.recordToolExecution({
+        allowedReceiptId: ALLOWED_ID,
+        outputHash: "11".repeat(32),
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "conflict" });
+  });
+
+  it("throws if server returns a non-allowed decision (server bug)", async () => {
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({
+        body: { ...TE_RESP, decision: "denied" },
+      }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await expect(
+      client.recordToolExecution({
+        allowedReceiptId: ALLOWED_ID,
+        outputHash: "11".repeat(32),
+      }),
+    ).rejects.toThrow(/unexpected tool-execution response/);
+  });
+});
+
 describe("UniclawClient.getReceipt", () => {
   it("GETs /receipts/<hash> and returns parsed JSON", async () => {
     const expectedReceipt = { version: 1, body: { foo: "bar" } };

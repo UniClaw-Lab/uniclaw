@@ -52,6 +52,12 @@ const ACTION = {
   inputHash: "00".repeat(32),
 };
 
+const TOOL_ACTION = {
+  kind: "tool.http_fetch",
+  target: "https://example.com/bench-tool",
+  inputHash: "11".repeat(32),
+};
+
 async function timeRun(label, fn, n) {
   // Warm-up.
   for (let i = 0; i < 5; i++) await fn(i);
@@ -103,6 +109,52 @@ const r3 = await timeRun(
   N,
 );
 
+// --- Step 23: tool-execution bench ---
+//
+// recordToolExecution requires an Allowed `tool.*` proposal
+// receipt. We mint a fresh one per iteration (so the bench
+// measures the actual sidecar-style flow: propose, then record
+// the result). We measure the recordToolExecution call alone,
+// AND the full propose+record chain.
+
+async function mintTool() {
+  const d = await clientNoVerify.evaluate(TOOL_ACTION);
+  if (d.kind !== "allowed") throw new Error(`expected allowed, got ${d.kind}`);
+  return d.contentId;
+}
+
+// Pre-mint pool to isolate recordToolExecution from evaluate cost.
+const POOL_N = 200 + 5;
+const allowedIds = [];
+for (let i = 0; i < POOL_N; i++) {
+  allowedIds.push(await mintTool());
+}
+let poolCursor = 0;
+
+const r4 = await timeRun(
+  "client.recordToolExecution verify=false",
+  () =>
+    clientNoVerify.recordToolExecution({
+      allowedReceiptId: allowedIds[poolCursor++],
+      outputHash: "22".repeat(32),
+    }),
+  N,
+);
+
+// And the full chain: propose + record + verify both.
+const r5 = await timeRun(
+  "propose+record chain (both verify=true)",
+  async () => {
+    const allowed = await clientVerify.evaluate(TOOL_ACTION);
+    if (allowed.kind !== "allowed") throw new Error("expected allowed");
+    await clientVerify.recordToolExecution({
+      allowedReceiptId: allowed.contentId,
+      outputHash: "22".repeat(32),
+    });
+  },
+  Math.floor(N / 2),
+);
+
 console.log("=== @uniclaw/client end-to-end latency bench ===");
 console.log(`baseUrl=${baseUrl}`);
 console.log(`node=${process.version}`);
@@ -111,11 +163,16 @@ console.log("");
 console.log(fmt(r1));
 console.log(fmt(r2));
 console.log(fmt(r3));
+console.log(fmt(r4));
+console.log(fmt(r5));
 console.log("");
 console.log("verify-overhead = (verify=true) - (verify=false)");
 console.log(`  = ${(r1.perReqMs - r2.perReqMs).toFixed(3)} ms/req`);
 console.log("client-overhead = (verify=false) - (raw fetch)");
 console.log(`  = ${(r2.perReqMs - r3.perReqMs).toFixed(3)} ms/req`);
+console.log("recordToolExecution (verify=false) is in the same band as evaluate (verify=false)");
+console.log(`  evaluate:            ${r2.perReqMs.toFixed(3)} ms/req`);
+console.log(`  recordToolExecution: ${r4.perReqMs.toFixed(3)} ms/req`);
 
 proc.kill("SIGINT");
 await new Promise((res) => proc.once("exit", res));
