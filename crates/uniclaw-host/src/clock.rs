@@ -99,7 +99,7 @@ pub(crate) fn format_iso8601_seconds(secs: i64) -> String {
 #[allow(
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
+    clippy::cast_possible_truncation
 )]
 fn days_to_ymd(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
