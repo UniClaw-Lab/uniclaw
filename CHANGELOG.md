@@ -12,6 +12,88 @@ format change history.
 
 ### Added
 
+- **`uniclaw-client` Python SDK** (Phase 3.5 / step 24) — new
+  top-level `packages/client-py/` (third packaging unit;
+  Rust workspace stays at 17 of 20). **Fully closes
+  success threshold 1 (portability)** from the deep-strategy
+  memory: TS dev + Python dev can both `pip`/`npm install` and
+  verify a Uniclaw receipt minted on a Rust kernel. Three-language
+  byte-identity proven against the same `canonical-v2.json`
+  fixture Rust and TS use.
+  - **One class, four operations, verify-by-default**, mirroring
+    the TS client but adapted to Python idioms (frozen
+    dataclasses, structural pattern matching, snake_case API):
+    - `UniclawClient.evaluate(action)` → `POST /v1/proposals`.
+      Returns a discriminated union — match on `decision.kind`
+      (`"allowed" | "denied" | "approved" | "pending"`).
+    - `UniclawClient.resolve_approval(content_id, principal=..., outcome=...)`
+      → `POST /v1/approvals/{id}/resolve`.
+    - `UniclawClient.record_tool_execution(allowed_receipt_id=..., …)`
+      → `POST /v1/tool-executions` (step 23 surface). Accepts
+      optional `secrets_used: Iterable[str]` and
+      `redaction: Redaction` arguments; absent fields are omitted
+      from the wire body.
+    - `UniclawClient.verify_receipt_url(url)` and
+      `UniclawClient.get_receipt(content_id)`.
+  - **Standalone verifier helpers** usable without a client:
+    `canonicalize`, `compute_content_id_bytes`,
+    `compute_content_id_hex`, `verify_receipt`,
+    `verify_receipt_json`, `verify_receipt_url`. Compliance
+    audit scripts can `from uniclaw_client import verify_receipt_url`
+    and walk a list of URLs without any HTTP-client wiring.
+  - **Typed errors.** `UniclawError(status, code, detail)` and
+    `UniclawVerifyError(content_id, detail)`. Branch on either
+    safely.
+  - **Two production dependencies, audited and minimal:**
+    - `PyNaCl` (Ed25519, libsodium binding)
+    - `blake3` (BLAKE3, ships precompiled C wheels)
+    - HTTP via stdlib `urllib.request` — no `requests`/`httpx`
+      dependency.
+  - **65 tests pass** across five files:
+    - `test_canonical.py` (12) — JCS unit tests mirroring the
+      Rust + TS suites.
+    - `test_conformance.py` (11) — **cross-language conformance**
+      against `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`.
+      Loads the SAME fixture the Rust snapshot test loads.
+      Asserts byte-identical canonical bytes + BLAKE3 content_ids
+      for all 5 vectors. **22 cross-language assertions total
+      across TS + Python that must hold on every PR touching
+      any canonicalizer.**
+    - `test_verify.py` (13) — sign+verify roundtrip + tamper
+      detection using PyNaCl's deterministic Ed25519.
+    - `test_client.py` (19) — unit tests with mocked `urlopen`:
+      wire shape, decision narrowing, redaction camelCase ↔
+      snake_case, 400/404/409 mapping, baseUrl normalization.
+    - `test_integration.py` (10, opt-in via `UNICLAW_INTEGRATION=1`)
+      — drives a live `uniclaw-host` subprocess through every
+      decision class + the tool-execution surface. Includes a
+      **tamper test** that intercepts the receipt GET, mutates
+      one body field, and confirms verify-by-default raises
+      `UniclawVerifyError` before the decision returns.
+  - **mypy strict clean** across all 7 source files
+    (`strict = true`, `disallow_untyped_defs = true`).
+  - **Bench** (`bench-results/24-python-client.txt`):
+    - `client.evaluate verify=True`: **5.19 ms/req**
+    - `client.evaluate verify=False`: 2.88 ms/req
+    - raw urllib POST baseline: 3.10 ms/req
+    - `record_tool_execution verify=False`: 4.12 ms/req
+    - Full propose+record chain (both verify=True): **12.74 ms/req**
+    - **Client overhead vs raw urllib: -0.22 ms/req** (within noise).
+    - **Verify overhead: 2.31 ms/req** — ~3-4× faster than the
+      TS client's verify path (12-19 ms) because pynacl + blake3
+      are C-bound, while the TS package uses pure-JS @noble/*.
+      Same bytes; faster verify.
+  - **What this step does NOT ship:**
+    - Actual `python -m build && twine upload` to PyPI (operations
+      task; one command once the `uniclaw-client` namespace is
+      reserved).
+    - Async I/O variant — sync first; `aiohttp`-based sibling can
+      land later. Same trust model, different transport.
+    - Go / Swift / Java siblings — each conforms to the same wire
+      format; each is its own step.
+    - A bundled CLI (`uniclaw-verify-py`). The package focuses on
+      library use; a CLI can land as a follow-up.
+
 - **Tool-execution API** (Phase 3.5 / step 23) —
   `POST /v1/tool-executions` on `uniclaw-host`, plus
   `client.recordToolExecution(...)` on `@uniclaw/client`. Closes

@@ -45,3 +45,13 @@ packages/*/dist/
 packages/*/.tsbuildinfo
 packages/*/coverage/
 packages/*/*.tgz
+
+# Python (packages/client-py and future Python workspaces)
+**/__pycache__/
+**/*.py[cod]
+**/.mypy_cache/
+**/.pytest_cache/
+**/*.egg-info/
+**/.ruff_cache/
+packages/*/build/
+packages/*/.venv/

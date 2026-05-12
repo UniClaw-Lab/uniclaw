@@ -1,0 +1,14 @@
+title = "step 24 python-client integration test"
+version = 1
+
+[[rules]]
+id = "test/no-shell"
+description = "shell.exec is denied"
+verdict = "deny"
+match.kind = "shell.exec"
+
+[[rules]]
+id = "test/admin-approval"
+description = "anything containing /admin/ requires approval"
+verdict = "require_approval"
+match.target_contains = "/admin/"

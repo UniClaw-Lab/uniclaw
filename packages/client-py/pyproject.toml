@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uniclaw-client"
+version = "0.1.0"
+description = "Python client + verifier for Uniclaw receipts. The on-ramp for any Python-based runtime (NemoClaw, compliance tooling, custom agents) that wants to anchor agent actions into Uniclaw receipts."
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "Uniclaw contributors" }]
+keywords = [
+    "uniclaw",
+    "receipt",
+    "client",
+    "verifier",
+    "adapter",
+    "sdk",
+    "audit",
+    "agent",
+    "compliance",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "PyNaCl>=1.5.0",
+    "blake3>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/UniClaw-Lab/uniclaw"
+Repository = "https://github.com/UniClaw-Lab/uniclaw"
+Source = "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/client-py"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: tests that spawn a real uniclaw-host subprocess (off by default; opt-in via UNICLAW_INTEGRATION=1)",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+files = ["src/uniclaw_client"]
+
+[[tool.mypy.overrides]]
+module = ["blake3", "nacl.*"]
+ignore_missing_imports = true
