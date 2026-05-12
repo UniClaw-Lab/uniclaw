@@ -12,6 +12,75 @@ format change history.
 
 ### Added
 
+- **`key_id` field on receipts** (Phase 3.5 / step 19a;
+  RFC-0001 rev **2.1**) — receipts can now name their signing
+  key. Optional `body.key_id: Option<String>` is additive: the
+  wire `schema_version` stays `2`, and signers without a `key_id`
+  produce byte-identical output to pre-19a (the field is omitted
+  from canonical bytes via `skip_serializing_if`). Pre-19a
+  receipts re-canonicalize identically — every existing
+  conformance vector still passes.
+  - **`uniclaw-receipt`:** new optional `key_id` field on
+    `ReceiptBody`.
+  - **`uniclaw-kernel`:** `Signer` trait gains
+    `fn key_id(&self) -> Option<&str> { None }` (default impl
+    is backward-compatible); `Kernel::mint()` threads it into the
+    body.
+  - **`uniclaw-host`:** `Ed25519Signer::with_key_id(impl Into<String>)`
+    + `.without_key_id()` builder methods. Existing
+    `from_seed` / `new` constructors continue to produce signers
+    with `key_id: None`. CLI flag `--key-id <string>` on
+    `uniclaw-host`. Server response shape
+    (`ReceiptResponse`) gains an optional `key_id` (skip-when-
+    None for wire-shape backward compat).
+  - **`@uniclaw/verifier`:** `VerifyResult.keyId?: string` —
+    populated when present in `body.key_id`. `ReceiptBody`
+    interface gains `key_id?: string`.
+  - **`@uniclaw/client`:** `DecisionBase.keyId?: string` —
+    threaded from the server's wire response into every
+    `Decision` variant (allowed / denied / approved / pending).
+  - **`uniclaw-client` (Python):** `_DecisionBase.key_id: str |
+    None` and `VerifyResult.key_id: str | None`. Both populated
+    when the server / signed body carries the field.
+  - **Conformance fixture extended.** Two new vectors in
+    `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`:
+    `with-key-id-prod-2026` (Allowed + `body.key_id =
+    "prod-2026"`) and `tool-execution-with-key-id-hsm-3`
+    (`$kernel/tool/executed` + `body.key_id = "hsm-3"` + a
+    `tool_execution` provenance edge). All three implementations
+    (Rust, TS, Python) produce byte-identical canonical bytes
+    AND byte-identical BLAKE3 content_ids for every vector.
+    First post-multi-language schema-additive change validating
+    the conformance machinery against a real evolution.
+  - **23 new tests across three suites** (workspace at **559
+    passing**):
+    - Rust (5): signer-without-key-id mints byte-identical
+      pre-19a receipts; signer-with-key-id surfaces it;
+      different key_ids → different content_ids; key_id persists
+      across chained mints; `Ed25519Signer` builder API.
+    - TS verifier (4): VerifyResult.keyId surface; absence;
+      content_id divergence; tamper detection. Plus **4 new
+      conformance assertions** auto-picked from the new fixture
+      vectors.
+    - TS client (4): keyId on every Decision variant when
+      server returns it; undefined when omitted; threaded
+      through resolveApproval + recordToolExecution.
+    - Python verifier + client (8): mirror of the TS surface;
+      mypy strict clean; **4 new conformance assertions** also
+      auto-picked.
+  - **RFC-0001 updated** with the new optional field and rev 2.1
+    documentation. No `schema_version` bump (additive change).
+  - **What this step does NOT ship:**
+    - A key directory service (operational mapping of `key_id →
+      pubkey + valid_from + valid_until + revocation`).
+    - A revocation API.
+    - Multi-issuer chains. `InMemoryReceiptLog` /
+      `SqliteReceiptLog` still pin a single issuer; rotation
+      remains a chain boundary.
+    - Signature aggregation / multi-key signing.
+    - Hot-reload of `key_id` (rotation = restart with a new
+      `--key-id`).
+
 - **Bearer-token authentication on `/v1`** (Phase 3.5 / step 25)
   — retires the long-standing "WARN /v1 proposal API is
   unauthenticated" tech debt from step 21. The proposal API is no

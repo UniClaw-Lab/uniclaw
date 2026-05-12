@@ -275,6 +275,9 @@ export class UniclawClient {
       issuer: resp.issuer,
       sequence: resp.sequence,
       schemaVersion: resp.schema_version,
+      // Step 19a: thread the optional key_id through. Omitted
+      // when the server didn't set one (skip_serializing_if).
+      ...(resp.key_id !== undefined ? { keyId: resp.key_id } : {}),
     };
     switch (resp.decision) {
       case "allowed":

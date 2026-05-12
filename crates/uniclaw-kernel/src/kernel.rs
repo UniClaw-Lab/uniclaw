@@ -538,6 +538,13 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             &self.state.prev_hash,
         );
 
+        // Step 19a: the optional key_id comes from the Signer.
+        // `None` keeps the field absent from the canonical bytes
+        // (serde's skip_serializing_if), so pre-19a receipts and
+        // post-19a receipts from signers that don't set a key_id
+        // are byte-identical.
+        let key_id = self.signer.key_id().map(alloc::string::String::from);
+
         let body = ReceiptBody {
             schema_version: RECEIPT_FORMAT_VERSION,
             issued_at,
@@ -546,6 +553,7 @@ impl<S: Signer, C: Clock, K: Constitution> Kernel<S, C, K> {
             constitution_rules,
             provenance,
             redactor_stack_hash,
+            key_id,
             merkle_leaf: MerkleLeaf {
                 sequence: self.state.sequence,
                 leaf_hash,

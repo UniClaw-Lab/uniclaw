@@ -182,6 +182,7 @@ mod tests {
             constitution_rules: vec![],
             provenance: vec![],
             redactor_stack_hash: None,
+            key_id: None,
             merkle_leaf: MerkleLeaf {
                 sequence: seq,
                 leaf_hash: Digest([0u8; 32]),

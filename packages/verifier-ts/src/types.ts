@@ -25,8 +25,15 @@ export interface ReceiptBody {
   constitution_rules: RuleRef[];
   provenance: ProvenanceEdge[];
   redactor_stack_hash: string | null;
+  // Step 19a: optional operator-chosen identifier for the signing
+  // key (e.g. `"prod-2026"`, `"hsm-3"`). Absent on pre-19a receipts
+  // and on signers that don't set one. The bytes of the issuer
+  // public key remain the trust anchor for signature verification;
+  // `key_id` is audit-only metadata for correlating with an
+  // external key directory entry.
+  key_id?: string;
   merkle_leaf: MerkleLeaf;
-  // Forward-compatible: schema additions land here without
+  // Forward-compatible: future schema additions land here without
   // breaking older verifiers.
   [k: string]: unknown;
 }
@@ -68,6 +75,11 @@ export interface VerifyResult {
   issuerHex: string;
   schemaVersion: number;
   decision: string;
+  // Step 19a: surfaced when present in `body.key_id`. Auditors
+  // use this to correlate with an external key directory entry
+  // (rotation, revocation, expiry). `undefined` on pre-19a
+  // receipts and on signers that don't set one.
+  keyId?: string;
   // Populated when `ok === false` to explain the failure mode.
   error?: string;
 }

@@ -140,6 +140,7 @@ These will be additive — JSON + Ed25519 is the canonical baseline.
     }
   ],
   "redactor_stack_hash": null,
+  "key_id": "prod-2026",
   "merkle_leaf": {
     "sequence": 0,
     "leaf_hash": "<64 hex chars = 32 bytes>",
@@ -159,6 +160,7 @@ These will be additive — JSON + Ed25519 is the canonical baseline.
 | `constitution_rules[]` | array | yes (may be empty) | Constitution rules consulted, with `matched` flags. |
 | `provenance[]` | array | yes (may be empty) | Typed edges (§7). |
 | `redactor_stack_hash` | hex(32) \| null | yes | BLAKE3 of the ordered list of redactor identifiers, when redaction ran. |
+| `key_id` | string | **no** (additive in rev 2.1) | Opaque operator-chosen identifier for the signing key — e.g. `"prod-2026"`, `"hsm-3"`, a UUID. The kernel embeds it when the signer was configured with one (`--key-id` on `uniclaw-host`). **Omitted entirely** from the canonical bytes when the signer has no `key_id` set, so pre-rev-2.1 receipts and post-rev-2.1 receipts from signers without a `key_id` remain byte-identical. The wire `schema_version` does **not** change (additive optional field). Auditors use `key_id` to correlate a receipt with an external **key directory** entry (rotation start/end, revocation, expiry). The trust anchor for signature verification remains the *bytes* of the issuer public key; `key_id` is audit-only metadata. |
 | `merkle_leaf` | object | yes | Position in the Merkle audit chain (§8). |
 
 ### 6.3 Hex encoding

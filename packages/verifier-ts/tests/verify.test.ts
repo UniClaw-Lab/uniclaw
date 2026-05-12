@@ -175,3 +175,53 @@ describe("verifyReceiptJson", () => {
     expect(result.error).toMatch(/invalid JSON/);
   });
 });
+
+describe("verifyReceipt — key_id (step 19a)", () => {
+  it("surfaces body.key_id in VerifyResult.keyId when present", async () => {
+    const body: ReceiptBody = {
+      ...sampleBody(),
+      key_id: "prod-2026",
+    };
+    const r = signReceipt(body, DEMO_SEED);
+    const result = await verifyReceipt(r);
+    expect(result.ok).toBe(true);
+    expect(result.keyId).toBe("prod-2026");
+  });
+
+  it("leaves VerifyResult.keyId undefined when absent", async () => {
+    const r = signReceipt(sampleBody(), DEMO_SEED);
+    const result = await verifyReceipt(r);
+    expect(result.ok).toBe(true);
+    expect(result.keyId).toBeUndefined();
+  });
+
+  it("treats two receipts with different key_id as different canonical bytes", async () => {
+    // The same logical action with a different key_id must produce
+    // a different content_id (since key_id is part of the signed
+    // body). Defense-in-depth confirmation that the field is in
+    // the canonical surface.
+    const body_a: ReceiptBody = { ...sampleBody(), key_id: "prod-2026" };
+    const body_b: ReceiptBody = { ...sampleBody(), key_id: "hsm-3" };
+    const ra = signReceipt(body_a, DEMO_SEED);
+    const rb = signReceipt(body_b, DEMO_SEED);
+    const va = await verifyReceipt(ra);
+    const vb = await verifyReceipt(rb);
+    expect(va.ok).toBe(true);
+    expect(vb.ok).toBe(true);
+    expect(va.contentIdHex).not.toBe(vb.contentIdHex);
+  });
+
+  it("tampering with key_id breaks the signature", async () => {
+    const body: ReceiptBody = { ...sampleBody(), key_id: "prod-2026" };
+    const r = signReceipt(body, DEMO_SEED);
+    // Mutate key_id post-sign — the signature was over the
+    // original bytes; this must fail to verify.
+    const tampered = {
+      ...r,
+      body: { ...r.body, key_id: "rogue-key" },
+    };
+    const result = await verifyReceipt(tampered);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/did not verify/);
+  });
+});

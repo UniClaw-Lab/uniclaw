@@ -58,6 +58,7 @@ fn mint(k: &SigningKey, sequence: u64, prev_hash: Digest, target: &str) -> Recei
         }],
         provenance: vec![],
         redactor_stack_hash: None,
+        key_id: None,
         merkle_leaf: MerkleLeaf {
             sequence,
             leaf_hash,

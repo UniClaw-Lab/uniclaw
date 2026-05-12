@@ -89,6 +89,32 @@ pub struct ReceiptBody {
     pub provenance: Vec<ProvenanceEdge>,
     /// Hash of the redactor stack that ran on the output (if any).
     pub redactor_stack_hash: Option<Digest>,
+    /// Opaque, operator-chosen identifier for the signing key
+    /// that minted this receipt (step 19a).
+    ///
+    /// Treated as audit-only metadata: the *bytes* of the issuer
+    /// public key remain the trust anchor for signature
+    /// verification. `key_id` lets an auditor correlate the
+    /// receipt with an external key directory entry — e.g.
+    /// `"prod-2026"` rotated to `"prod-2027"` on 2027-01-01,
+    /// `"hsm-3"` revoked on incident X — without trusting bytes
+    /// blindly.
+    ///
+    /// Wire-format additive: when `None`, the field is omitted
+    /// from the canonical bytes (`#[serde(skip_serializing_if =
+    /// "Option::is_none")]`). Old receipts (no `key_id`) keep
+    /// verifying byte-identically against pre-19a verifiers.
+    /// New receipts with `key_id` set are byte-different but
+    /// still parse and verify under any verifier that handles
+    /// unknown / extra fields (Rust serde-default, the TS / Python
+    /// JCS canonicalizers — all three of which sort + emit
+    /// whatever keys are present).
+    ///
+    /// The `schema_version` is NOT bumped: this is an additive
+    /// change to the v2 wire shape, not a new version. The RFC
+    /// notes the spec revision as "2.1" but the wire field stays 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
     /// Position of this action in the Merkle audit chain.
     pub merkle_leaf: MerkleLeaf,
 }
@@ -521,6 +547,7 @@ mod tests {
             constitution_rules: vec![],
             provenance: vec![],
             redactor_stack_hash: None,
+            key_id: None,
             merkle_leaf: MerkleLeaf {
                 sequence: 0,
                 leaf_hash: Digest([0u8; 32]),

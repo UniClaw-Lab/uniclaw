@@ -25,6 +25,24 @@ pub trait Signer {
     /// Public half of this signer's keypair, matching the `issuer` field
     /// of every receipt this signer produces.
     fn public_key(&self) -> PublicKey;
+
+    /// Optional operator-chosen identifier for this signing key
+    /// (step 19a, RFC-0001 rev 2.1).
+    ///
+    /// When `Some`, the kernel includes the value in every minted
+    /// receipt's [`ReceiptBody::key_id`] field so auditors can
+    /// correlate the receipt with an external key directory entry
+    /// (rotation, revocation, expiry). When `None` (default),
+    /// receipts omit the field and remain byte-identical to
+    /// pre-19a output — fully backward-compatible.
+    ///
+    /// Implementations should keep the value short and stable for
+    /// the lifetime of this signer (e.g. `"prod-2026"`,
+    /// `"hsm-3"`). Rotation = construct a new `Signer` with a new
+    /// `key_id`.
+    fn key_id(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Provides the wall-clock string used for receipt `issued_at` fields.

@@ -62,6 +62,12 @@ class _DecisionBase:
 
     ``receipt_url`` is absolute (the client joins the server's
     relative ``/receipts/<hash>`` with the configured ``base_url``).
+
+    ``key_id`` (step 19a, RFC-0001 rev 2.1) is the operator-chosen
+    identifier for the signing key when the host was started with
+    ``--key-id``. ``None`` when the server omitted the field — both
+    for pre-19a hosts and post-19a hosts whose signer has no
+    ``key_id`` set.
     """
 
     content_id: str
@@ -69,6 +75,7 @@ class _DecisionBase:
     issuer: str
     sequence: int
     schema_version: int
+    key_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,11 +103,18 @@ Decision = Union[AllowedDecision, DeniedDecision, ApprovedDecision, PendingDecis
 
 @dataclass(frozen=True)
 class VerifyResult:
-    """Result of verifying a receipt locally."""
+    """Result of verifying a receipt locally.
+
+    ``key_id`` (step 19a) is surfaced when the signed body carried
+    one. Auditors use it to correlate the receipt with an external
+    key directory entry. ``None`` on pre-19a receipts and on
+    signers that don't set one.
+    """
 
     ok: bool
     content_id_hex: str
     issuer_hex: str
     schema_version: int
     decision: str
+    key_id: str | None = None
     error: str | None = None

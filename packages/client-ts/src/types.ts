@@ -59,6 +59,12 @@ export interface DecisionBase {
   issuer: string;
   sequence: number;
   schemaVersion: number;
+  /// Step 19a: operator-chosen identifier for the signing key
+  /// when the server's signer was configured with one (`--key-id`
+  /// on `uniclaw-host`). Absent when the signer has no `key_id`.
+  /// Use it to correlate with an external key directory entry
+  /// (rotation, revocation, expiry).
+  keyId?: string;
 }
 
 export interface AllowedDecision extends DecisionBase {
@@ -109,6 +115,9 @@ export interface WireReceiptResponse {
   issuer: string;
   sequence: number;
   schema_version: number;
+  /// Step 19a — omitted on the wire when the server's signer
+  /// didn't set a key_id (skip_serializing_if = "Option::is_none").
+  key_id?: string;
 }
 
 /// Wire-format error body. The server emits this on every 4xx/5xx

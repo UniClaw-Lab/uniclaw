@@ -467,3 +467,50 @@ def test_server_401_surfaces_as_unauthorized_error(mock_urlopen: _Recorder) -> N
         c.evaluate(Action(kind="x", target="y", input_hash="00" * 32))
     assert exc.value.status == 401
     assert exc.value.code == "unauthorized"
+
+
+# ---------------------------------------------------------------------
+# Step 19a — key_id surface on Decision
+# ---------------------------------------------------------------------
+
+
+def test_key_id_surfaces_on_decision_when_present(mock_urlopen: _Recorder) -> None:
+    mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {
+        "body": {**ALLOWED_RESP, "key_id": "prod-2026"},
+    }
+    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    d = c.evaluate(Action(kind="http.fetch", target="x", input_hash="00" * 32))
+    assert d.kind == "allowed"
+    assert d.key_id == "prod-2026"
+
+
+def test_key_id_is_none_when_server_omits_it(mock_urlopen: _Recorder) -> None:
+    mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {"body": ALLOWED_RESP}
+    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    d = c.evaluate(Action(kind="http.fetch", target="x", input_hash="00" * 32))
+    assert d.kind == "allowed"
+    assert d.key_id is None
+
+
+def test_key_id_threads_through_resolve_approval(mock_urlopen: _Recorder) -> None:
+    cid = "d" * 64
+    mock_urlopen.handlers[f"POST {BASE}/v1/approvals/{cid}/resolve"] = {
+        "body": {**APPROVED_RESP, "key_id": "hsm-3"},
+    }
+    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    d = c.resolve_approval(cid, principal="ops", outcome="approved")
+    assert d.kind == "approved"
+    assert d.key_id == "hsm-3"
+
+
+def test_key_id_threads_through_record_tool_execution(mock_urlopen: _Recorder) -> None:
+    mock_urlopen.handlers[f"POST {BASE}/v1/tool-executions"] = {
+        "body": {**TOOL_EXEC_RESP, "key_id": "prod-2026"},
+    }
+    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    d = c.record_tool_execution(
+        allowed_receipt_id="f" * 64,
+        output_hash="11" * 32,
+    )
+    assert d.kind == "allowed"
+    assert d.key_id == "prod-2026"

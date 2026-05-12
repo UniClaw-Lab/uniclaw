@@ -829,6 +829,7 @@ fn deep_sleep_pass_walks_real_receipt_log_and_mints_signed_receipt() {
             constitution_rules: vec![],
             provenance: vec![],
             redactor_stack_hash: None,
+            key_id: None,
             merkle_leaf: uniclaw_receipt::MerkleLeaf {
                 sequence: i,
                 leaf_hash: Digest([0u8; 32]),

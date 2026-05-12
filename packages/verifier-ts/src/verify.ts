@@ -50,6 +50,11 @@ export async function verifyReceipt(receipt: Receipt): Promise<VerifyResult> {
   result.issuerHex = receipt.issuer;
   result.schemaVersion = receipt.body.schema_version ?? 0;
   result.decision = receipt.body.decision ?? "";
+  // Step 19a: surface the operator-chosen key identifier when
+  // the signer set one. Absent on pre-19a receipts.
+  if (typeof receipt.body.key_id === "string") {
+    result.keyId = receipt.body.key_id;
+  }
 
   let issuerBytes: Uint8Array;
   let signatureBytes: Uint8Array;

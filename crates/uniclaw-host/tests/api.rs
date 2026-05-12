@@ -994,3 +994,175 @@ async fn auth_config_with_token_rejects_wrong_length() {
     assert!(AuthConfig::with_token(vec![0u8; 33]).is_err());
     assert!(AuthConfig::with_token(vec![0u8; 64]).is_err());
 }
+
+// ---------------------------------------------------------------------
+// Step 19a — key_id field on minted receipts
+// ---------------------------------------------------------------------
+
+fn build_app_with_key_id(key_id: &str) -> Router {
+    let signer = Ed25519Signer::from_seed(&TEST_SEED).with_key_id(key_id);
+    let issuer = signer.public_key();
+    let constitution = parse_toml(TEST_CONSTITUTION).expect("parse test constitution");
+    let kernel = Kernel::new(signer, SystemClock, constitution);
+    let log = Arc::new(RwLock::new(InMemoryReceiptLog::new(issuer)));
+    let state = ApiState::new(kernel, log.clone());
+    router(log).merge(api_router(state, AuthConfig::insecure()))
+}
+
+#[tokio::test]
+async fn signer_without_key_id_mints_receipts_without_key_id_field() {
+    // Default Ed25519Signer path: receipts must NOT have a key_id
+    // (byte-identical to pre-step-19a output via skip_serializing_if).
+    let app = build_app();
+    let req = json_request(
+        "/v1/proposals",
+        &json!({
+            "action": {
+                "kind": "http.fetch",
+                "target": "https://example.com/no-key-id",
+                "input_hash": "00".repeat(32),
+            }
+        }),
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let r: ReceiptResponse = body_as(resp).await;
+
+    let fetch = app
+        .oneshot(
+            Request::builder()
+                .uri(&r.receipt_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let receipt: Receipt = body_as(fetch).await;
+    assert!(
+        receipt.body.key_id.is_none(),
+        "default signer must not set body.key_id",
+    );
+    crypto::verify(&receipt).expect("receipt verifies");
+}
+
+#[tokio::test]
+async fn signer_with_key_id_mints_receipts_carrying_that_id() {
+    let app = build_app_with_key_id("prod-2026");
+    let req = json_request(
+        "/v1/proposals",
+        &json!({
+            "action": {
+                "kind": "http.fetch",
+                "target": "https://example.com/with-key",
+                "input_hash": "00".repeat(32),
+            }
+        }),
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let r: ReceiptResponse = body_as(resp).await;
+
+    let fetch = app
+        .oneshot(
+            Request::builder()
+                .uri(&r.receipt_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let receipt: Receipt = body_as(fetch).await;
+    assert_eq!(
+        receipt.body.key_id.as_deref(),
+        Some("prod-2026"),
+        "minted receipt must carry the signer's key_id",
+    );
+    // And the signature still verifies under the embedded issuer.
+    crypto::verify(&receipt).expect("receipt verifies with key_id present");
+}
+
+#[tokio::test]
+async fn key_id_appears_in_canonical_bytes_and_changes_content_id() {
+    // The whole point of putting key_id IN the body (not on the
+    // unsigned wrapper) is that it changes the canonical bytes
+    // and therefore the content_id. Two otherwise-identical
+    // receipts with different key_ids must have different
+    // content_ids.
+    let app_a = build_app_with_key_id("prod-2026");
+    let app_b = build_app_with_key_id("hsm-3");
+
+    let body = json!({
+        "action": {
+            "kind": "http.fetch",
+            "target": "https://example.com/same-action",
+            "input_hash": "00".repeat(32),
+        }
+    });
+
+    let id_a: ReceiptResponse = body_as(
+        app_a
+            .oneshot(json_request("/v1/proposals", &body))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let id_b: ReceiptResponse = body_as(
+        app_b
+            .oneshot(json_request("/v1/proposals", &body))
+            .await
+            .unwrap(),
+    )
+    .await;
+
+    // Same action, same kernel state — but different key_ids must
+    // produce different content_ids (and therefore different
+    // receipt_urls).
+    assert_ne!(
+        id_a.content_id, id_b.content_id,
+        "different key_id values must produce different content_ids",
+    );
+}
+
+#[tokio::test]
+async fn key_id_appears_in_chain_of_receipts() {
+    // 3 sequential proposals — each receipt's body.key_id should
+    // be the same configured value. Regression guard against
+    // accidentally dropping the field per-mint.
+    let app = build_app_with_key_id("hsm-3");
+    for i in 0..3u64 {
+        let req = json_request(
+            "/v1/proposals",
+            &json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": format!("https://example.com/seq/{i}"),
+                    "input_hash": format!("{i:02x}").repeat(32),
+                }
+            }),
+        );
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let r: ReceiptResponse = body_as(resp).await;
+        let fetch = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&r.receipt_url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt: Receipt = body_as(fetch).await;
+        assert_eq!(
+            receipt.body.key_id.as_deref(),
+            Some("hsm-3"),
+            "sequence {i}: body.key_id must persist across mints",
+        );
+    }
+}
+
+#[tokio::test]
+async fn ed25519_signer_with_key_id_builder_works() {
+    let signer = Ed25519Signer::from_seed(&[1u8; 32]).with_key_id("test-key");
+    assert_eq!(signer.key_id(), Some("test-key"));
+    let signer = signer.without_key_id();
+    assert_eq!(signer.key_id(), None);
+}

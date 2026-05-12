@@ -94,6 +94,16 @@ struct Args {
     #[arg(long)]
     signer_seed_hex: Option<String>,
 
+    /// Optional opaque identifier for the signing key (step 19a /
+    /// RFC-0001 rev 2.1). When set, the kernel embeds this value
+    /// in every minted receipt's `body.key_id` so auditors can
+    /// correlate receipts with an external key directory entry
+    /// — useful for rotation, revocation, and expiry tracking.
+    /// Receipts minted without `--key-id` omit the field entirely
+    /// and remain byte-identical to pre-19a output.
+    #[arg(long)]
+    key_id: Option<String>,
+
     /// 32-byte bearer token (64 hex chars) required on every `/v1`
     /// request as `Authorization: Bearer <hex>`. Constant-time
     /// comparison. Read-only routes stay public.
@@ -150,7 +160,10 @@ async fn run_proposal_mode(c_path: &Path, args: &Args) -> Result<()> {
         .context("--constitution requires --signer-seed-hex (dev key, 64 hex chars)")?;
     let seed_digest = uniclaw_receipt::Digest::from_hex(seed_hex)
         .context("--signer-seed-hex must be 64 hex characters")?;
-    let signer = Ed25519Signer::from_seed(&seed_digest.0);
+    let mut signer = Ed25519Signer::from_seed(&seed_digest.0);
+    if let Some(key_id) = args.key_id.as_deref() {
+        signer = signer.with_key_id(key_id);
+    }
     let issuer = signer.public_key();
 
     // --- Resolve auth (safe-default: require one or the other) ---

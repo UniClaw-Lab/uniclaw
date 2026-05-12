@@ -722,3 +722,89 @@ describe("UniclawClient — bearer-token auth (step 25)", () => {
     ).rejects.toMatchObject({ status: 401, code: "unauthorized" });
   });
 });
+
+describe("UniclawClient — key_id surface (step 19a)", () => {
+  it("surfaces keyId on the Decision when server returns it", async () => {
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/proposals`]: () => ({
+        body: { ...ALLOWED_RESP, key_id: "prod-2026" },
+      }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+    });
+    const d = await client.evaluate({
+      kind: "http.fetch",
+      target: "x",
+      inputHash: "00".repeat(32),
+    });
+    expect(d.kind).toBe("allowed");
+    expect(d.keyId).toBe("prod-2026");
+  });
+
+  it("omits keyId when server doesn't return it", async () => {
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+    });
+    const d = await client.evaluate({
+      kind: "http.fetch",
+      target: "x",
+      inputHash: "00".repeat(32),
+    });
+    expect(d.kind).toBe("allowed");
+    expect(d.keyId).toBeUndefined();
+  });
+
+  it("threads keyId through resolveApproval responses", async () => {
+    const cid = "d".repeat(64);
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/approvals/${cid}/resolve`]: () => ({
+        body: { ...APPROVED_RESP, key_id: "hsm-3" },
+      }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+    });
+    const d = await client.resolveApproval(cid, {
+      principal: "ops",
+      outcome: "approved",
+    });
+    expect(d.kind).toBe("approved");
+    expect(d.keyId).toBe("hsm-3");
+  });
+
+  it("threads keyId through recordToolExecution responses", async () => {
+    const teResp = {
+      decision: "allowed",
+      content_id: "9".repeat(64),
+      receipt_url: `/receipts/${"9".repeat(64)}`,
+      issuer: "b".repeat(64),
+      sequence: 4,
+      schema_version: 2,
+      key_id: "prod-2026",
+    };
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({ body: teResp }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+    });
+    const d = await client.recordToolExecution({
+      allowedReceiptId: "f".repeat(64),
+      outputHash: "11".repeat(32),
+    });
+    expect(d.kind).toBe("allowed");
+    expect(d.keyId).toBe("prod-2026");
+  });
+});

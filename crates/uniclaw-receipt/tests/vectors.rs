@@ -41,6 +41,7 @@ fn vector_bodies() -> Vec<(&'static str, ReceiptBody)> {
                 constitution_rules: vec![],
                 provenance: vec![],
                 redactor_stack_hash: None,
+                key_id: None,
                 merkle_leaf: MerkleLeaf {
                     sequence: 0,
                     leaf_hash: Digest([1u8; 32]),
@@ -65,6 +66,7 @@ fn vector_bodies() -> Vec<(&'static str, ReceiptBody)> {
                 }],
                 provenance: vec![],
                 redactor_stack_hash: None,
+                key_id: None,
                 merkle_leaf: MerkleLeaf {
                     sequence: 1,
                     leaf_hash: Digest([3u8; 32]),
@@ -97,6 +99,7 @@ fn vector_bodies() -> Vec<(&'static str, ReceiptBody)> {
                     },
                 ],
                 redactor_stack_hash: None,
+                key_id: None,
                 merkle_leaf: MerkleLeaf {
                     sequence: 2,
                     leaf_hash: Digest([5u8; 32]),
@@ -122,6 +125,7 @@ fn vector_bodies() -> Vec<(&'static str, ReceiptBody)> {
                     kind: "redaction_applied".into(),
                 }],
                 redactor_stack_hash: Some(Digest([0xAB; 32])),
+                key_id: None,
                 merkle_leaf: MerkleLeaf {
                     sequence: 3,
                     leaf_hash: Digest([6u8; 32]),
@@ -146,10 +150,66 @@ fn vector_bodies() -> Vec<(&'static str, ReceiptBody)> {
                 }],
                 provenance: vec![],
                 redactor_stack_hash: None,
+                key_id: None,
                 merkle_leaf: MerkleLeaf {
                     sequence: 4,
                     leaf_hash: Digest([8u8; 32]),
                     prev_hash: Digest([6u8; 32]),
+                },
+            },
+        ),
+        // Step 19a: a Allowed receipt where the kernel's signer
+        // identifies itself with `key_id = "prod-2026"`. The new
+        // field is sorted into JCS output between `issued_at` and
+        // `merkle_leaf` (lexicographic).
+        (
+            "with-key-id-prod-2026",
+            ReceiptBody {
+                schema_version: RECEIPT_FORMAT_VERSION,
+                issued_at: "2026-04-26T12:00:05Z".into(),
+                action: Action {
+                    kind: "http.fetch".into(),
+                    target: "https://example.com/with-key-id".into(),
+                    input_hash: Digest([9u8; 32]),
+                },
+                decision: Decision::Allowed,
+                constitution_rules: vec![],
+                provenance: vec![],
+                redactor_stack_hash: None,
+                key_id: Some("prod-2026".into()),
+                merkle_leaf: MerkleLeaf {
+                    sequence: 5,
+                    leaf_hash: Digest([0x9a; 32]),
+                    prev_hash: Digest([8u8; 32]),
+                },
+            },
+        ),
+        // Step 19a: a tool-execution receipt where the kernel
+        // signed with `key_id = "hsm-3"`. Exercises the field
+        // alongside `redactor_stack_hash` and a provenance edge.
+        (
+            "tool-execution-with-key-id-hsm-3",
+            ReceiptBody {
+                schema_version: RECEIPT_FORMAT_VERSION,
+                issued_at: "2026-04-26T12:00:06Z".into(),
+                action: Action {
+                    kind: "$kernel/tool/executed".into(),
+                    target: "tool=http_fetch status=ok".into(),
+                    input_hash: Digest([0u8; 32]),
+                },
+                decision: Decision::Allowed,
+                constitution_rules: vec![],
+                provenance: vec![ProvenanceEdge {
+                    from: "receipt:9a".into(),
+                    to: "tool:http_fetch".into(),
+                    kind: "tool_execution".into(),
+                }],
+                redactor_stack_hash: None,
+                key_id: Some("hsm-3".into()),
+                merkle_leaf: MerkleLeaf {
+                    sequence: 6,
+                    leaf_hash: Digest([0xb1; 32]),
+                    prev_hash: Digest([0x9a; 32]),
                 },
             },
         ),
@@ -188,6 +248,16 @@ fn expected_outputs() -> Vec<(&'static str, &'static str)> {
         (
             "7b22616374696f6e223a7b22696e7075745f68617368223a2230373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037303730373037222c226b696e64223a226769742e70757368222c22746172676574223a226f726967696e2f6d61696e227d2c22636f6e737469747574696f6e5f72756c6573223a5b7b226964223a22736f6c6f2d6465762f6769742d707573682d617070726f76616c222c226d617463686564223a747275657d5d2c226465636973696f6e223a2270656e64696e67222c226973737565645f6174223a22323032362d30342d32365431323a30303a30345a222c226d65726b6c655f6c656166223a7b226c6561665f68617368223a2230383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038222c22707265765f68617368223a2230363036303630363036303630363036303630363036303630363036303630363036303630363036303630363036303630363036303630363036303630363036222c2273657175656e6365223a347d2c2270726f76656e616e6365223a5b5d2c227265646163746f725f737461636b5f68617368223a6e756c6c2c22736368656d615f76657273696f6e223a327d",
             "e2f44f6ca11d5e864f2b53003aad88796fd3afffebefd796103016138d06a48e",
+        ),
+        // [5] with-key-id-prod-2026
+        (
+            "7b22616374696f6e223a7b22696e7075745f68617368223a2230393039303930393039303930393039303930393039303930393039303930393039303930393039303930393039303930393039303930393039303930393039222c226b696e64223a22687474702e6665746368222c22746172676574223a2268747470733a2f2f6578616d706c652e636f6d2f776974682d6b65792d6964227d2c22636f6e737469747574696f6e5f72756c6573223a5b5d2c226465636973696f6e223a22616c6c6f776564222c226973737565645f6174223a22323032362d30342d32365431323a30303a30355a222c226b65795f6964223a2270726f642d32303236222c226d65726b6c655f6c656166223a7b226c6561665f68617368223a2239613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961222c22707265765f68617368223a2230383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038303830383038222c2273657175656e6365223a357d2c2270726f76656e616e6365223a5b5d2c227265646163746f725f737461636b5f68617368223a6e756c6c2c22736368656d615f76657273696f6e223a327d",
+            "636bc6c174b51e0bbdf6771e21b4ce2aa355822c9127b80a27ac7991e2307067",
+        ),
+        // [6] tool-execution-with-key-id-hsm-3
+        (
+            "7b22616374696f6e223a7b22696e7075745f68617368223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c226b696e64223a22246b65726e656c2f746f6f6c2f6578656375746564222c22746172676574223a22746f6f6c3d687474705f6665746368207374617475733d6f6b227d2c22636f6e737469747574696f6e5f72756c6573223a5b5d2c226465636973696f6e223a22616c6c6f776564222c226973737565645f6174223a22323032362d30342d32365431323a30303a30365a222c226b65795f6964223a2268736d2d33222c226d65726b6c655f6c656166223a7b226c6561665f68617368223a2262316231623162316231623162316231623162316231623162316231623162316231623162316231623162316231623162316231623162316231623162316231222c22707265765f68617368223a2239613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961396139613961222c2273657175656e6365223a367d2c2270726f76656e616e6365223a5b7b2266726f6d223a22726563656970743a3961222c226b696e64223a22746f6f6c5f657865637574696f6e222c22746f223a22746f6f6c3a687474705f6665746368227d5d2c227265646163746f725f737461636b5f68617368223a6e756c6c2c22736368656d615f76657273696f6e223a327d",
+            "d5d12da483fda2d001a60a9ae599a3176a9e34639947a41235589dbe021a3eca",
         ),
     ]
 }

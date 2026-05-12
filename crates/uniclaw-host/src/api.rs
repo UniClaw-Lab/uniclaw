@@ -325,6 +325,13 @@ pub struct ReceiptResponse {
     pub issuer: String,
     pub sequence: u64,
     pub schema_version: u32,
+    /// Step 19a: operator-chosen identifier for the signing key,
+    /// when present in the minted receipt's `body.key_id`.
+    /// Omitted from the wire response when the signer didn't set
+    /// one (backward-compatible: pre-19a clients receive the same
+    /// shape they did before).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
 }
 
 /// `POST /v1/approvals/{content_id}/resolve` request body.
@@ -731,6 +738,7 @@ fn receipt_response(r: &Receipt) -> ReceiptResponse {
         issuer: hex32(&r.issuer.0),
         sequence: r.body.merkle_leaf.sequence,
         schema_version: r.body.schema_version,
+        key_id: r.body.key_id.clone(),
     }
 }
 

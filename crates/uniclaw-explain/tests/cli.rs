@@ -34,6 +34,7 @@ fn allowed_body() -> ReceiptBody {
             kind: "request".into(),
         }],
         redactor_stack_hash: None,
+        key_id: None,
         merkle_leaf: MerkleLeaf {
             sequence: 0,
             leaf_hash: Digest([0xAB; 32]),

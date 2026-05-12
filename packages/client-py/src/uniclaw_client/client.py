@@ -291,6 +291,12 @@ class UniclawClient:
         issuer = str(resp["issuer"])
         sequence = int(resp["sequence"])
         schema_version = int(resp["schema_version"])
+        # Step 19a: thread optional key_id through. Server omits
+        # the field when its signer has no key_id set
+        # (`skip_serializing_if`), so .get() returns None and
+        # AllowedDecision/etc. fall back to their key_id default.
+        key_id_raw = resp.get("key_id")
+        key_id = key_id_raw if isinstance(key_id_raw, str) else None
 
         if decision_str == "allowed":
             return AllowedDecision(
@@ -299,6 +305,7 @@ class UniclawClient:
                 issuer=issuer,
                 sequence=sequence,
                 schema_version=schema_version,
+                key_id=key_id,
             )
         if decision_str == "denied":
             return DeniedDecision(
@@ -307,6 +314,7 @@ class UniclawClient:
                 issuer=issuer,
                 sequence=sequence,
                 schema_version=schema_version,
+                key_id=key_id,
             )
         if decision_str == "approved":
             return ApprovedDecision(
@@ -315,6 +323,7 @@ class UniclawClient:
                 issuer=issuer,
                 sequence=sequence,
                 schema_version=schema_version,
+                key_id=key_id,
             )
         if decision_str == "pending":
             return PendingDecision(
@@ -323,6 +332,7 @@ class UniclawClient:
                 issuer=issuer,
                 sequence=sequence,
                 schema_version=schema_version,
+                key_id=key_id,
             )
         raise UniclawError(
             200, "malformed_response", f"unknown decision in response: {decision_str!r}",

@@ -37,6 +37,7 @@ fn main() {
             kind: "request".into(),
         }],
         redactor_stack_hash: None,
+        key_id: None,
         merkle_leaf: MerkleLeaf {
             sequence: 0,
             leaf_hash: Digest([0u8; 32]),

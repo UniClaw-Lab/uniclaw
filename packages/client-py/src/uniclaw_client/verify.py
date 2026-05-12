@@ -65,6 +65,9 @@ def verify_receipt(receipt: dict[str, Any]) -> VerifyResult:
     decision = body.get("decision", "")
     schema_version_i = schema_version if isinstance(schema_version, int) else 0
     decision_s = decision if isinstance(decision, str) else ""
+    # Step 19a: surface body.key_id when present.
+    key_id_raw = body.get("key_id")
+    key_id_s = key_id_raw if isinstance(key_id_raw, str) else None
 
     try:
         issuer_bytes = hex_to_bytes(issuer_hex)
@@ -105,6 +108,7 @@ def verify_receipt(receipt: dict[str, Any]) -> VerifyResult:
             issuer_hex=issuer_hex,
             schema_version=schema_version_i,
             decision=decision_s,
+            key_id=key_id_s,
             error="signature did not verify under the embedded issuer key",
         )
 
@@ -114,6 +118,7 @@ def verify_receipt(receipt: dict[str, Any]) -> VerifyResult:
         issuer_hex=issuer_hex,
         schema_version=schema_version_i,
         decision=decision_s,
+        key_id=key_id_s,
     )
 
 
