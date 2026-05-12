@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 use uniclaw_constitution::parse_toml;
-use uniclaw_host::api::{ApiState, api_router};
+use uniclaw_host::api::{ApiState, AuthConfig, api_router};
 use uniclaw_host::clock::SystemClock;
 use uniclaw_host::router;
 use uniclaw_host::signer::Ed25519Signer;
@@ -57,13 +57,17 @@ struct ReceiptResponse {
 }
 
 fn build_app() -> Router {
+    build_app_with_auth(AuthConfig::insecure())
+}
+
+fn build_app_with_auth(auth: AuthConfig) -> Router {
     let signer = Ed25519Signer::from_seed(&TEST_SEED);
     let issuer = signer.public_key();
     let constitution = parse_toml(TEST_CONSTITUTION).expect("parse test constitution");
     let kernel = Kernel::new(signer, SystemClock, constitution);
     let log = Arc::new(RwLock::new(InMemoryReceiptLog::new(issuer)));
     let state = ApiState::new(kernel, log.clone());
-    router(log).merge(api_router(state))
+    router(log).merge(api_router(state, auth))
 }
 
 async fn body_json(resp: axum::response::Response) -> Value {
@@ -760,4 +764,233 @@ async fn tool_execution_against_non_tool_action_returns_409() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let body = body_json(resp).await;
     assert!(body["detail"].as_str().unwrap().contains("tool."));
+}
+
+// ---------------------------------------------------------------------
+// Step 25 — bearer-token auth on /v1
+// ---------------------------------------------------------------------
+
+const TEST_TOKEN_BYTES: [u8; 32] = [0xa5u8; 32];
+// 64 hex chars matching the bytes above.
+const TEST_TOKEN_HEX: &str = "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5";
+
+fn build_auth_app() -> Router {
+    let auth = AuthConfig::with_token(TEST_TOKEN_BYTES.to_vec()).expect("32 bytes");
+    build_app_with_auth(auth)
+}
+
+fn proposal_request(uri: &str) -> Request<Body> {
+    json_request(
+        uri,
+        &json!({
+            "action": {
+                "kind": "http.fetch",
+                "target": "https://example.com/auth-test",
+                "input_hash": "00".repeat(32),
+            }
+        }),
+    )
+}
+
+#[tokio::test]
+async fn auth_required_returns_401_without_authorization_header() {
+    let app = build_auth_app();
+    let resp = app
+        .oneshot(proposal_request("/v1/proposals"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "unauthorized");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("missing Authorization")
+    );
+}
+
+#[tokio::test]
+async fn auth_required_returns_401_with_non_bearer_scheme() {
+    let app = build_auth_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/proposals")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, "Basic foo")
+        .body(Body::from(
+            json!({"action": {"kind": "x", "target": "y", "input_hash": "00".repeat(32)}})
+                .to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn auth_required_returns_401_with_wrong_token() {
+    let app = build_auth_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/proposals")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            // Same length, different bytes — exercises the
+            // constant-time comparison branch.
+            format!("Bearer {}", "b6".repeat(32)),
+        )
+        .body(Body::from(
+            json!({"action": {"kind": "x", "target": "y", "input_hash": "00".repeat(32)}})
+                .to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let body = body_json(resp).await;
+    assert!(body["detail"].as_str().unwrap().contains("rejected"));
+}
+
+#[tokio::test]
+async fn auth_required_returns_401_with_short_token() {
+    let app = build_auth_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/proposals")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, "Bearer abcd")
+        .body(Body::from(
+            json!({"action": {"kind": "x", "target": "y", "input_hash": "00".repeat(32)}})
+                .to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let body = body_json(resp).await;
+    assert!(body["detail"].as_str().unwrap().contains("64 hex"));
+}
+
+#[tokio::test]
+async fn auth_required_accepts_correct_token() {
+    let app = build_auth_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/proposals")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN_HEX}"))
+        .body(Body::from(
+            json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": "https://example.com/data",
+                    "input_hash": "00".repeat(32),
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let r: ReceiptResponse = body_as(resp).await;
+    assert_eq!(r.decision, "allowed");
+}
+
+#[tokio::test]
+async fn auth_required_accepts_lowercase_bearer_scheme() {
+    // RFC 6750: the scheme name is case-insensitive.
+    let app = build_auth_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/proposals")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("bearer {TEST_TOKEN_HEX}"))
+        .body(Body::from(
+            json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": "https://example.com/data",
+                    "input_hash": "00".repeat(32),
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn auth_required_does_not_affect_read_only_routes() {
+    // /healthz, /, /verify, /receipts/<hash> must stay public even
+    // when /v1 is gated. The cold-verify trust property depends on
+    // public receipt access.
+    let app = build_auth_app();
+    for uri in ["/healthz", "/", "/verify"] {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "read-only route {uri} must stay public under auth",
+        );
+    }
+}
+
+#[tokio::test]
+async fn auth_required_protects_every_v1_endpoint() {
+    // Sweep across the three /v1 endpoints — each must return 401
+    // when no Authorization header is supplied.
+    let app = build_auth_app();
+    for uri in [
+        "/v1/proposals",
+        &format!("/v1/approvals/{}/resolve", "00".repeat(32)),
+        "/v1/tool-executions",
+    ] {
+        let req = json_request(
+            uri,
+            &json!({
+                "action": {"kind": "x", "target": "y", "input_hash": "00".repeat(32)},
+                "principal": "x",
+                "outcome": "approved",
+                "allowed_receipt_id": "00".repeat(32),
+                "output_hash": "00".repeat(32),
+            }),
+        );
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "endpoint {uri} must require auth",
+        );
+    }
+}
+
+#[tokio::test]
+async fn insecure_mode_accepts_calls_without_authorization() {
+    // The existing build_app() uses AuthConfig::insecure(); every
+    // pre-existing test exercises this path. One explicit test
+    // here for documentation + regression guard.
+    let app = build_app(); // insecure mode
+    let resp = app
+        .oneshot(proposal_request("/v1/proposals"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let r: ReceiptResponse = body_as(resp).await;
+    assert_eq!(r.decision, "allowed");
+}
+
+#[tokio::test]
+async fn auth_config_with_token_rejects_wrong_length() {
+    // Defensive: only 32-byte tokens are accepted at AuthConfig
+    // construction. The CLI also enforces 64 hex chars upstream;
+    // this is the library-layer guard.
+    assert!(AuthConfig::with_token(vec![0u8; 16]).is_err());
+    assert!(AuthConfig::with_token(vec![0u8; 31]).is_err());
+    assert!(AuthConfig::with_token(vec![0u8; 32]).is_ok());
+    assert!(AuthConfig::with_token(vec![0u8; 33]).is_err());
+    assert!(AuthConfig::with_token(vec![0u8; 64]).is_err());
 }

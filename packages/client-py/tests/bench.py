@@ -21,6 +21,7 @@ Output goes to stdout; redirect to ``bench-results/24-python-client.txt``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import signal
 import subprocess
@@ -35,6 +36,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 HOST_BIN = REPO_ROOT / "target" / "release" / "uniclaw-host"
 FIXTURE = Path(__file__).parent / "fixtures" / "test-constitution.toml"
 SEED_HEX = "2a" * 32
+# Bench-only token. Set via env BENCH_TOKEN_HEX="..." to use a
+# specific token; defaults to a fixed pattern. Either way the
+# bench measures the auth-enabled path so the numbers reflect
+# production-style deployments.
+BENCH_TOKEN_HEX = os.environ.get("BENCH_TOKEN_HEX") or ("c3" * 32)
 
 
 def start_host() -> tuple[subprocess.Popen[str], str]:
@@ -46,6 +52,7 @@ def start_host() -> tuple[subprocess.Popen[str], str]:
             str(HOST_BIN),
             "--constitution", str(FIXTURE),
             "--signer-seed-hex", SEED_HEX,
+            "--bearer-token-hex", BENCH_TOKEN_HEX,
             "--bind", "127.0.0.1:0",
         ],
         stdout=subprocess.DEVNULL,
@@ -94,8 +101,12 @@ def main() -> None:
         action = Action(kind="http.fetch", target="https://example.com/bench", input_hash="00" * 32)
         tool_action = Action(kind="tool.http_fetch", target="https://example.com/bench-tool", input_hash="11" * 32)
 
-        c_verify = UniclawClient(base_url=base_url)
-        c_no_verify = UniclawClient(base_url=base_url, verify_by_default=False)
+        c_verify = UniclawClient(base_url=base_url, bearer_token=BENCH_TOKEN_HEX)
+        c_no_verify = UniclawClient(
+            base_url=base_url,
+            verify_by_default=False,
+            bearer_token=BENCH_TOKEN_HEX,
+        )
 
         # (a) evaluate verify=True
         r1 = time_run(
@@ -121,11 +132,17 @@ def main() -> None:
         }).encode("utf-8")
 
         def raw_post() -> None:
+            # Bench host runs with --bearer-token-hex; raw baseline
+            # must include the Authorization header too so it's an
+            # apples-to-apples comparison with the client paths.
             req = urllib.request.Request(
                 f"{base_url}/v1/proposals",
                 method="POST",
                 data=proposal_payload,
-                headers={"content-type": "application/json"},
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {BENCH_TOKEN_HEX}",
+                },
             )
             with urllib.request.urlopen(req, timeout=5) as r:
                 r.read()

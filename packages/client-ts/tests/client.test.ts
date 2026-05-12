@@ -18,6 +18,9 @@ interface Calls {
   url: string;
   method: string;
   body?: unknown;
+  /// Lowercased header map captured per call. Tests assert on
+  /// auth headers + content-type.
+  headers: Record<string, string>;
 }
 
 function makeFetchMock(handlers: Record<
@@ -31,7 +34,27 @@ function makeFetchMock(handlers: Record<
     const body = init?.body
       ? JSON.parse(init.body as string)
       : undefined;
-    calls.push({ url, method, body });
+    // Normalize whatever headers shape `init.headers` is in into a
+    // plain { lowercased: string } map. RequestInit.headers can be
+    // a Headers, a [key, value][], or a Record — the client passes
+    // a plain Record so the simple branch covers it, but we handle
+    // the others too in case test code does something different.
+    const headers: Record<string, string> = {};
+    const raw = init?.headers;
+    if (raw instanceof Headers) {
+      raw.forEach((v, k) => {
+        headers[k.toLowerCase()] = v;
+      });
+    } else if (Array.isArray(raw)) {
+      for (const [k, v] of raw) {
+        headers[k.toLowerCase()] = v;
+      }
+    } else if (raw && typeof raw === "object") {
+      for (const [k, v] of Object.entries(raw)) {
+        headers[k.toLowerCase()] = String(v);
+      }
+    }
+    calls.push({ url, method, body, headers });
     const key = `${method} ${url}`;
     const handler = handlers[key];
     if (!handler) {
@@ -571,5 +594,131 @@ describe("UniclawClient.getReceipt", () => {
     await expect(client.getReceipt("a".repeat(64))).rejects.toMatchObject({
       status: 404,
     });
+  });
+});
+
+describe("UniclawClient — bearer-token auth (step 25)", () => {
+  const TOKEN = "a5".repeat(32);
+  const RECEIPT_BODY = {
+    version: 1,
+    body: {
+      schema_version: 2,
+      decision: "allowed",
+      merkle_leaf: { sequence: 0, leaf_hash: "00".repeat(32), prev_hash: "00".repeat(32) },
+    },
+  };
+
+  it("attaches Authorization: Bearer <token> on POST /v1/proposals", async () => {
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+      bearerToken: TOKEN,
+    });
+    await client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+    expect(calls[0]!.headers["content-type"]).toBe("application/json");
+  });
+
+  it("attaches Authorization on POST /v1/approvals/{id}/resolve", async () => {
+    const id = "d".repeat(64);
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/approvals/${id}/resolve`]: () => ({ body: APPROVED_RESP }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+      bearerToken: TOKEN,
+    });
+    await client.resolveApproval(id, { principal: "ops", outcome: "approved" });
+    expect(calls[0]!.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("attaches Authorization on POST /v1/tool-executions", async () => {
+    const teResp = {
+      decision: "allowed",
+      content_id: "9".repeat(64),
+      receipt_url: `/receipts/${"9".repeat(64)}`,
+      issuer: "b".repeat(64),
+      sequence: 4,
+      schema_version: 2,
+    };
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/tool-executions`]: () => ({ body: teResp }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+      bearerToken: TOKEN,
+    });
+    await client.recordToolExecution({
+      allowedReceiptId: "f".repeat(64),
+      outputHash: "11".repeat(32),
+    });
+    expect(calls[0]!.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("does NOT attach Authorization on GET /receipts/<hash>", async () => {
+    const hash = "a".repeat(64);
+    const { fetch, calls } = makeFetchMock({
+      [`GET ${BASE}/receipts/${hash}`]: () => ({ body: RECEIPT_BODY }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+      bearerToken: TOKEN,
+    });
+    await client.getReceipt(hash);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.headers["authorization"]).toBeUndefined();
+  });
+
+  it("does NOT attach Authorization on verifyReceiptUrl", async () => {
+    const hash = "a".repeat(64);
+    const url = `${BASE}/receipts/${hash}`;
+    const { fetch, calls } = makeFetchMock({
+      [`GET ${url}`]: () => ({ body: RECEIPT_BODY }),
+    });
+    const client = new UniclawClient({
+      baseUrl: BASE,
+      fetch,
+      verifyByDefault: false,
+      bearerToken: TOKEN,
+    });
+    // The receipt body above is intentionally minimal — verify will
+    // return ok=false, but we're testing the auth header, not the
+    // verifier correctness.
+    await client.verifyReceiptUrl(url);
+    expect(calls[0]!.headers["authorization"]).toBeUndefined();
+  });
+
+  it("omits Authorization entirely when no token configured", async () => {
+    const { fetch, calls } = makeFetchMock({
+      [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) });
+    expect(calls[0]!.headers["authorization"]).toBeUndefined();
+    expect(calls[0]!.headers["content-type"]).toBe("application/json");
+  });
+
+  it("surfaces 401 from server as UniclawError(status=401, code='unauthorized')", async () => {
+    const { fetch } = makeFetchMock({
+      [`POST ${BASE}/v1/proposals`]: () => ({
+        status: 401,
+        body: { error: "unauthorized", detail: "missing Authorization header" },
+      }),
+    });
+    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    await expect(
+      client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) }),
+    ).rejects.toMatchObject({ status: 401, code: "unauthorized" });
   });
 });

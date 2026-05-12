@@ -52,6 +52,15 @@ class UniclawClient:
             being returned. Per-call override via the ``verify``
             keyword on :meth:`evaluate` / :meth:`resolve_approval` /
             :meth:`record_tool_execution`.
+        bearer_token: 32-byte bearer token as a 64-char hex string.
+            When set, the client adds ``Authorization: Bearer <hex>``
+            to every ``/v1`` request (proposals, approvals,
+            tool-executions). Read-only calls
+            (``get_receipt`` / ``verify_receipt_url``) are NOT
+            auth'd — receipts are publicly verifiable by design.
+            Required by ``uniclaw-host`` started with
+            ``--bearer-token-hex``. Omit when talking to a host
+            running ``--insecure-no-auth``.
         timeout: HTTP timeout in seconds (passed to ``urlopen``).
     """
 
@@ -60,13 +69,26 @@ class UniclawClient:
         base_url: str,
         *,
         verify_by_default: bool = True,
+        bearer_token: str | None = None,
         timeout: float = 10.0,
     ) -> None:
         # Strip trailing slashes so f"{base_url}/v1/…" doesn't produce
         # a double slash.
         self._base_url = base_url.rstrip("/")
         self._verify_by_default = verify_by_default
+        self._bearer_token = bearer_token
         self._timeout = timeout
+
+    def _v1_post_headers(self) -> dict[str, str]:
+        """Build the standard /v1 POST headers, including
+        ``Authorization: Bearer <token>`` when a bearer token is
+        configured. Read-only GETs intentionally omit auth so
+        receipts stay cold-verifiable.
+        """
+        headers = {"content-type": "application/json"}
+        if self._bearer_token is not None:
+            headers["authorization"] = f"Bearer {self._bearer_token}"
+        return headers
 
     # ------------------------------------------------------------
     # Public API
@@ -201,7 +223,7 @@ class UniclawClient:
             url,
             method="POST",
             data=data,
-            headers={"content-type": "application/json"},
+            headers=self._v1_post_headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310

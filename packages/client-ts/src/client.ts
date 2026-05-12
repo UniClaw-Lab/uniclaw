@@ -37,14 +37,24 @@ export interface UniclawClientOptions {
   /// `"http://127.0.0.1:8787"`). Trailing slashes are tolerated.
   baseUrl: string;
   /// Optional `fetch` override — useful in tests, or for callers
-  /// that need to inject auth headers / agent options. Defaults to
-  /// the global `fetch` (Node 20+ and all browsers).
+  /// that need to inject custom transport options (mTLS / proxy
+  /// agent / etc.). Defaults to the global `fetch` (Node 20+ and
+  /// all browsers).
   fetch?: typeof fetch;
   /// Default `true`. When true, every mint is verified locally
   /// against its embedded issuer key before being returned. Per-
   /// call override via the `verify` option on `evaluate()` /
   /// `resolveApproval()`.
   verifyByDefault?: boolean;
+  /// 32-byte bearer token (64 hex chars). When set, the client
+  /// adds `Authorization: Bearer <hex>` to every `/v1` request
+  /// (proposals, approvals, tool-executions). Read-only calls
+  /// (`GET /receipts/<hash>` and `verifyReceiptUrl`) are NOT
+  /// auth'd — receipts are publicly verifiable by design.
+  ///
+  /// Required by `uniclaw-host` started with `--bearer-token-hex`.
+  /// Omit when talking to a host running `--insecure-no-auth`.
+  bearerToken?: string;
 }
 
 export interface EvaluateOptions {
@@ -58,6 +68,7 @@ export class UniclawClient {
   readonly #baseUrl: string;
   readonly #fetch: typeof fetch;
   readonly #verifyByDefault: boolean;
+  readonly #bearerToken: string | undefined;
 
   constructor(opts: UniclawClientOptions) {
     // Strip any trailing slash so `${baseUrl}/v1/...` doesn't
@@ -65,6 +76,22 @@ export class UniclawClient {
     this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.#fetch = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.#verifyByDefault = opts.verifyByDefault ?? true;
+    this.#bearerToken = opts.bearerToken;
+  }
+
+  /// Build the standard /v1 POST headers, including
+  /// `Authorization: Bearer <token>` when a bearer token is
+  /// configured. Read-only GETs (`getReceipt`, `verifyReceiptUrl`)
+  /// must NOT use this helper — they intentionally omit auth so
+  /// receipts stay cold-verifiable.
+  #v1PostHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (this.#bearerToken !== undefined) {
+      headers["authorization"] = `Bearer ${this.#bearerToken}`;
+    }
+    return headers;
   }
 
   /// Submit an action for evaluation. Returns the kernel's
@@ -180,7 +207,7 @@ export class UniclawClient {
     });
     const response = await this.#fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: this.#v1PostHeaders(),
       body,
     });
     if (!response.ok) {
@@ -196,7 +223,7 @@ export class UniclawClient {
     const url = `${this.#baseUrl}/v1/approvals/${contentId}/resolve`;
     const response = await this.#fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: this.#v1PostHeaders(),
       body: JSON.stringify(body),
     });
     if (!response.ok) {
@@ -232,7 +259,7 @@ export class UniclawClient {
     }
     const response = await this.#fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: this.#v1PostHeaders(),
       body: JSON.stringify(wire),
     });
     if (!response.ok) {

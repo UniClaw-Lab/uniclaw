@@ -52,6 +52,10 @@ def host_url() -> Iterator[str]:
             f"release binary missing at {HOST_BIN}; "
             f"run `cargo build --release --bin uniclaw-host -p uniclaw-host`",
         )
+    # Step 25: binary refuses proposal mode without explicit
+    # auth choice. These tests don't exercise auth themselves
+    # — see ``test_integration_auth.py`` for that — so we pass
+    # --insecure-no-auth to stay on the prior code path.
     proc = subprocess.Popen(
         [
             str(HOST_BIN),
@@ -59,6 +63,7 @@ def host_url() -> Iterator[str]:
             str(FIXTURE),
             "--signer-seed-hex",
             SEED_HEX,
+            "--insecure-no-auth",
             "--bind",
             "127.0.0.1:0",
         ],

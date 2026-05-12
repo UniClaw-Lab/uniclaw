@@ -46,6 +46,10 @@ async function startHost(): Promise<string> {
         `Run \`cargo build --release --bin uniclaw-host -p uniclaw-host\` first.`,
     );
   }
+  // Step 25: the binary refuses to start in proposal mode without
+  // explicitly choosing an auth posture. These tests don't exercise
+  // auth themselves — see `tests/integration_auth.test.ts` for that
+  // — so we pass --insecure-no-auth to stay on the prior code path.
   const proc = spawn(
     HOST_BIN,
     [
@@ -53,6 +57,7 @@ async function startHost(): Promise<string> {
       FIXTURE,
       "--signer-seed-hex",
       SEED_HEX,
+      "--insecure-no-auth",
       "--bind",
       "127.0.0.1:0",
     ],

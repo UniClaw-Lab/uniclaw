@@ -21,13 +21,24 @@
 //!
 //! ## Trust model
 //!
-//! There is **no authentication** in this PR. The API is intended to
-//! be reachable only from a trusted caller on the same host
-//! (loopback / unix socket / private network segment). Operators
-//! exposing it on a routable interface MUST add their own
-//! authentication layer (reverse proxy with bearer token / mTLS).
-//! A future step adds first-class bearer-token auth configured at
-//! startup.
+//! Step 25 adds first-class **bearer-token authentication** on the
+//! `/v1` surface. The auth config is supplied to [`api_router`] at
+//! startup:
+//!
+//! - [`AuthConfig::with_token`] — every `/v1` request must carry
+//!   `Authorization: Bearer <hex>` matching the configured token
+//!   (constant-time comparison). Missing or wrong → 401.
+//! - [`AuthConfig::insecure`] — accept every `/v1` call. Operators
+//!   must opt in via `--insecure-no-auth` on the binary (a startup
+//!   `WARN` line is printed in this mode).
+//!
+//! Read-only routes (`/receipts/<hash>`, `/verify`, `/`, `/healthz`)
+//! stay public regardless — the cold-verify trust property requires
+//! public access to receipts.
+//!
+//! The binary's safe default is *require auth*: if `--constitution`
+//! is provided without `--bearer-token-hex` AND without
+//! `--insecure-no-auth`, startup fails with a helpful error.
 //!
 //! ## Out of scope (queued)
 //!
@@ -45,8 +56,10 @@ use std::sync::{Arc, Mutex};
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::{Path, Request, State};
+use axum::http::{StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use serde::{Deserialize, Serialize};
@@ -105,18 +118,172 @@ impl ApiState {
     }
 }
 
+/// Authentication configuration for the `/v1` proposal API.
+///
+/// The two constructors codify the operator's decision:
+///
+/// - [`AuthConfig::with_token`] — require `Authorization: Bearer
+///   <hex>` matching the supplied 32-byte token on every `/v1`
+///   call. Constant-time comparison.
+/// - [`AuthConfig::insecure`] — accept every `/v1` call without
+///   any header. Operators must explicitly opt in (the binary
+///   requires `--insecure-no-auth`); a startup WARN line is
+///   printed.
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    /// `None` = insecure mode (no auth required). `Some(bytes)` =
+    /// the token to compare against. Length is enforced to 32 bytes
+    /// by [`AuthConfig::with_token`].
+    bearer_token: Option<Vec<u8>>,
+}
+
+/// Why an [`AuthConfig::with_token`] call rejected the supplied
+/// token bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthConfigError {
+    /// Token wasn't 32 bytes long.
+    WrongLength { got: usize },
+}
+
+impl core::fmt::Display for AuthConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::WrongLength { got } => write!(
+                f,
+                "bearer token must be exactly 32 bytes (64 hex chars), got {got}",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AuthConfigError {}
+
+impl AuthConfig {
+    /// Construct an [`AuthConfig`] that requires `Authorization:
+    /// Bearer <hex>` matching `token` on every `/v1` call. The
+    /// token must be exactly 32 bytes (256 bits).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthConfigError::WrongLength`] if `token` is not
+    /// exactly 32 bytes.
+    pub fn with_token(token: Vec<u8>) -> Result<Self, AuthConfigError> {
+        if token.len() != 32 {
+            return Err(AuthConfigError::WrongLength { got: token.len() });
+        }
+        Ok(Self {
+            bearer_token: Some(token),
+        })
+    }
+
+    /// Construct an [`AuthConfig`] that accepts every `/v1` call
+    /// without any header. The binary's CLI requires
+    /// `--insecure-no-auth` to land here.
+    #[must_use]
+    pub fn insecure() -> Self {
+        Self { bearer_token: None }
+    }
+
+    /// Whether this config requires auth on `/v1` calls.
+    #[must_use]
+    pub fn requires_auth(&self) -> bool {
+        self.bearer_token.is_some()
+    }
+}
+
 /// Build the `/v1` axum router. The caller composes this with the
 /// read-only router via `Router::merge` to expose both surfaces on
 /// the same listener.
-pub fn api_router(state: Arc<ApiState>) -> Router {
-    Router::new()
+///
+/// `auth` controls whether the `/v1` routes require a bearer token.
+/// Read-only routes (mounted by [`crate::router`]) are always
+/// public and are not affected by this config.
+pub fn api_router(state: Arc<ApiState>, auth: AuthConfig) -> Router {
+    let auth = Arc::new(auth);
+    let mut routes = Router::new()
         .route("/v1/proposals", post(post_proposal))
         .route(
             "/v1/approvals/:content_id/resolve",
             post(post_resolve_approval),
         )
         .route("/v1/tool-executions", post(post_tool_execution))
-        .with_state(state)
+        .with_state(state);
+    if auth.requires_auth() {
+        // Only install the middleware when auth is actually required.
+        // Insecure mode skips the layer entirely — keeps the routing
+        // fast path identical to pre-step-25 for operators who opted
+        // out.
+        let auth_for_layer = auth.clone();
+        routes = routes.layer(middleware::from_fn(move |req: Request, next: Next| {
+            let auth = auth_for_layer.clone();
+            async move { auth_middleware(auth, req, next).await }
+        }));
+    }
+    routes
+}
+
+/// Constant-time byte-slice equality. Returns `false` immediately
+/// on length mismatch — the length itself isn't a secret (32 bytes,
+/// well-known). For equal-length inputs, OR'd XORs avoid leaking
+/// the position of the first differing byte.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Bearer-token middleware. Runs on every `/v1` request when
+/// [`AuthConfig::requires_auth`] is true.
+async fn auth_middleware(auth: Arc<AuthConfig>, req: Request, next: Next) -> Response {
+    let Some(expected) = auth.bearer_token.as_ref() else {
+        // Insecure mode — shouldn't be installed, but if it is we
+        // fail open. Defensive: the layer is only added in
+        // api_router when requires_auth is true.
+        return next.run(req).await;
+    };
+
+    let Some(header_value) = req.headers().get(header::AUTHORIZATION) else {
+        return unauthorized("missing Authorization header");
+    };
+    let Ok(value) = header_value.to_str() else {
+        return unauthorized("Authorization header must be ASCII");
+    };
+    // Accept both "Bearer foo" and "bearer foo" — RFC 6750 says the
+    // scheme is case-insensitive. The token itself is hex so case
+    // matters only for hex parsing.
+    let Some(token_str) = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))
+    else {
+        return unauthorized("Authorization must be 'Bearer <hex-token>'");
+    };
+    let token_str = token_str.trim();
+    let Ok(provided_digest) = uniclaw_receipt::Digest::from_hex(token_str) else {
+        return unauthorized("bearer token must be 64 hex characters");
+    };
+    if !ct_eq(&provided_digest.0, expected) {
+        return unauthorized("bearer token rejected");
+    }
+    next.run(req).await
+}
+
+fn unauthorized(detail: &str) -> Response {
+    // Same `{error, detail}` shape the other ApiError variants use.
+    let body = serde_json::json!({
+        "error": "unauthorized",
+        "detail": detail,
+    });
+    let body_bytes = serde_json::to_vec(&body).expect("static JSON serializes");
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body_bytes))
+        .expect("unauthorized response builds")
 }
 
 // ---------------------------------------------------------------------

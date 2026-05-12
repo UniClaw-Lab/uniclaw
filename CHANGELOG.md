@@ -12,6 +12,78 @@ format change history.
 
 ### Added
 
+- **Bearer-token authentication on `/v1`** (Phase 3.5 / step 25)
+  — retires the long-standing "WARN /v1 proposal API is
+  unauthenticated" tech debt from step 21. The proposal API is no
+  longer accidentally exposable: `uniclaw-host --constitution`
+  refuses to start without an explicit auth choice (one of
+  `--bearer-token-hex` / `--insecure-no-auth`). Read-only routes
+  (`/receipts/<hash>`, `/verify`, `/healthz`, `/`) stay public —
+  the cold-verify trust property depends on it.
+  - **Server (`crates/uniclaw-host/src/api.rs`):**
+    - New `AuthConfig` type with two constructors:
+      `AuthConfig::with_token(Vec<u8>)` (enforces 32 bytes; returns
+      `AuthConfigError::WrongLength` otherwise) and
+      `AuthConfig::insecure()`.
+    - `api_router(state, auth)` installs an axum
+      `middleware::from_fn` layer on the `/v1` routes only when
+      `auth.requires_auth()` — insecure mode skips the layer
+      entirely (zero overhead for the prior code path).
+    - `auth_middleware` reads `Authorization`, requires
+      `Bearer ` (RFC 6750 case-insensitive), parses 64 hex chars,
+      compares via constant-time `ct_eq` helper, and returns 401
+      with the standard `{error: "unauthorized", detail: "..."}`
+      JSON body on any failure.
+  - **Binary (`bin/uniclaw-host.rs`):**
+    - `--bearer-token-hex <64-hex>` accepts the 32-byte token.
+    - `--insecure-no-auth` explicitly opts out (mutually exclusive
+      with the token flag; bail if both set).
+    - Proposal mode (`--constitution`) refuses to start without
+      one of the two flags. Insecure exposure is now a deliberate
+      typed choice in the deploy artifact, not a logged warning.
+  - **TypeScript client (`packages/client-ts`):**
+    - New `bearerToken?: string` option on `UniclawClientOptions`.
+    - New private `#v1PostHeaders()` helper attaches
+      `Authorization: Bearer <hex>` on every `/v1` POST when set;
+      `getReceipt` and `verifyReceiptUrl` deliberately omit it
+      (read paths stay public by design).
+  - **Python client (`packages/client-py`):**
+    - New `bearer_token: str | None = None` keyword argument on
+      `UniclawClient`. New private `_v1_post_headers()` mirrors
+      the TS surface. mypy strict clean.
+  - **Tests (33 new across three suites; 542 passing in total):**
+    - **Rust (`tests/api.rs`, 10 new):** 401 on missing header,
+      401 on non-`Bearer` scheme, 401 on wrong token (exercises
+      constant-time branch), 401 on short token, 200 on correct
+      token, RFC 6750 lowercase `bearer` accepted, read-only
+      routes (`/healthz`, `/`, `/verify`) stay public under auth,
+      every `/v1` endpoint protected, insecure mode regression
+      guard, `AuthConfig::with_token` length validation.
+    - **TS (`tests/client.test.ts` 7 + `tests/integration_auth.test.ts`
+      5 new):** mocked-fetch unit tests for header attachment +
+      read-path omission + 401 surfacing; live-binary integration
+      tests covering wrong-token / correct-token / public-read /
+      full propose+record chain with auth.
+    - **Python (`tests/test_client.py` 6 + `tests/test_integration_auth.py`
+      5 new):** mirror the TS suite via `unittest.mock` patching
+      of `urlopen` + live binary.
+    - Existing client integration tests now pass
+      `--insecure-no-auth` to the host (the binary requires an
+      explicit choice in proposal mode).
+  - **Bench** (`bench-results/25-bearer-token-auth.txt`):
+    - `client.evaluate verify=False` (auth on): 4.77 ms/req.
+    - Raw urllib POST baseline (auth on): 3.52 ms/req.
+    - Per-request auth overhead is sub-millisecond (constant-time
+      compare + header construction each ~1 µs); the visible shift
+      vs the step-24 no-auth baseline is dominated by cross-run
+      noise, not the auth path.
+  - **What this step does NOT ship:**
+    - Identity-bound approvals (recording *who* authorized — Phase
+      6 governance).
+    - Per-token capability scoping (one global token v1).
+    - Token rotation API (restart with a new token).
+    - mTLS / OAuth2 / OIDC (operators use a reverse proxy).
+
 - **`uniclaw-client` Python SDK** (Phase 3.5 / step 24) — new
   top-level `packages/client-py/` (third packaging unit;
   Rust workspace stays at 17 of 20). **Fully closes

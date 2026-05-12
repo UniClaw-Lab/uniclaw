@@ -107,7 +107,13 @@ class _Recorder:
                 body = json.loads(req.data.decode("utf-8"))
             except json.JSONDecodeError:
                 body = req.data.decode("utf-8", errors="replace")
-        self.calls.append({"url": url, "method": method, "body": body})
+        # urllib.request.Request stores headers in `req.headers`
+        # (a dict with title-cased keys). We normalize to lowercase
+        # for assertion ergonomics.
+        headers: dict[str, str] = {
+            k.lower(): v for k, v in dict(req.headers).items()
+        }
+        self.calls.append({"url": url, "method": method, "body": body, "headers": headers})
         key = f"{method} {url}"
         handler = self.handlers.get(key)
         if handler is None:
@@ -382,3 +388,82 @@ def test_get_receipt_404_surfaces(mock_urlopen: _Recorder) -> None:
     with pytest.raises(UniclawError) as exc:
         client().get_receipt("a" * 64)
     assert exc.value.status == 404
+
+
+# ---------------------------------------------------------------------
+# Step 25 — bearer-token auth
+# ---------------------------------------------------------------------
+
+
+TOKEN_HEX = "a5" * 32
+
+
+def test_auth_attaches_bearer_header_on_post_proposals(mock_urlopen: _Recorder) -> None:
+    mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {"body": ALLOWED_RESP}
+    c = UniclawClient(
+        base_url=BASE,
+        verify_by_default=False,
+        bearer_token=TOKEN_HEX,
+    )
+    c.evaluate(Action(kind="x", target="y", input_hash="00" * 32))
+    assert mock_urlopen.calls[0]["headers"]["authorization"] == f"Bearer {TOKEN_HEX}"
+    assert mock_urlopen.calls[0]["headers"]["content-type"] == "application/json"
+
+
+def test_auth_attaches_bearer_header_on_resolve(mock_urlopen: _Recorder) -> None:
+    cid = "d" * 64
+    mock_urlopen.handlers[f"POST {BASE}/v1/approvals/{cid}/resolve"] = {"body": APPROVED_RESP}
+    c = UniclawClient(
+        base_url=BASE,
+        verify_by_default=False,
+        bearer_token=TOKEN_HEX,
+    )
+    c.resolve_approval(cid, principal="ops", outcome="approved")
+    assert mock_urlopen.calls[0]["headers"]["authorization"] == f"Bearer {TOKEN_HEX}"
+
+
+def test_auth_attaches_bearer_header_on_tool_execution(mock_urlopen: _Recorder) -> None:
+    mock_urlopen.handlers[f"POST {BASE}/v1/tool-executions"] = {"body": TOOL_EXEC_RESP}
+    c = UniclawClient(
+        base_url=BASE,
+        verify_by_default=False,
+        bearer_token=TOKEN_HEX,
+    )
+    c.record_tool_execution(allowed_receipt_id="f" * 64, output_hash="11" * 32)
+    assert mock_urlopen.calls[0]["headers"]["authorization"] == f"Bearer {TOKEN_HEX}"
+
+
+def test_auth_does_not_attach_header_on_get_receipt(mock_urlopen: _Recorder) -> None:
+    receipt = {"version": 1, "body": {"foo": "bar"}}
+    cid = "a" * 64
+    mock_urlopen.handlers[f"GET {BASE}/receipts/{cid}"] = {"body": receipt}
+    c = UniclawClient(
+        base_url=BASE,
+        verify_by_default=False,
+        bearer_token=TOKEN_HEX,
+    )
+    c.get_receipt(cid)
+    assert mock_urlopen.calls[0]["method"] == "GET"
+    # Read-only routes must not carry auth — the receipt-is-public
+    # property depends on it.
+    assert "authorization" not in mock_urlopen.calls[0]["headers"]
+
+
+def test_no_token_means_no_authorization_header(mock_urlopen: _Recorder) -> None:
+    mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {"body": ALLOWED_RESP}
+    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    c.evaluate(Action(kind="x", target="y", input_hash="00" * 32))
+    assert "authorization" not in mock_urlopen.calls[0]["headers"]
+    assert mock_urlopen.calls[0]["headers"]["content-type"] == "application/json"
+
+
+def test_server_401_surfaces_as_unauthorized_error(mock_urlopen: _Recorder) -> None:
+    mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {
+        "status": 401,
+        "body": {"error": "unauthorized", "detail": "missing Authorization header"},
+    }
+    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    with pytest.raises(UniclawError) as exc:
+        c.evaluate(Action(kind="x", target="y", input_hash="00" * 32))
+    assert exc.value.status == 401
+    assert exc.value.code == "unauthorized"

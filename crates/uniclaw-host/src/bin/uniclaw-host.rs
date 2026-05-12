@@ -35,7 +35,7 @@ use clap::{ArgGroup, Parser};
 use tokio::sync::RwLock;
 
 use uniclaw_constitution::parse_toml;
-use uniclaw_host::api::{ApiState, api_router};
+use uniclaw_host::api::{ApiState, AuthConfig, api_router};
 use uniclaw_host::clock::SystemClock;
 use uniclaw_host::router;
 use uniclaw_host::signer::Ed25519Signer;
@@ -74,21 +74,41 @@ struct Args {
     bind: SocketAddr,
 
     /// Enable proposal-API mode by loading a constitution from a
-    /// TOML file. When present, the `/v1/proposals` and
-    /// `/v1/approvals/{id}/resolve` endpoints are mounted; the
-    /// kernel that backs them uses this constitution to decide each
-    /// proposal.
+    /// TOML file. When present, the `/v1/proposals` /
+    /// `/v1/approvals/{id}/resolve` / `/v1/tool-executions`
+    /// endpoints are mounted; the kernel that backs them uses this
+    /// constitution to decide each proposal.
     ///
-    /// **Has no authentication.** Bind to loopback (`127.0.0.1`) or
-    /// a private interface. A future step adds bearer-token auth.
+    /// **Authentication.** In proposal mode, supply either
+    /// `--bearer-token-hex <64-hex>` to require an
+    /// `Authorization: Bearer <hex>` header on every `/v1` call,
+    /// OR `--insecure-no-auth` to explicitly opt out. The binary
+    /// refuses to start in proposal mode without one of the two
+    /// flags so insecure exposure can't happen by accident.
     #[arg(long)]
     constitution: Option<PathBuf>,
 
-    /// 32-byte seed hex (64 chars) for the dev signing key. Required
-    /// when `--constitution` is provided. Production must replace
-    /// this with an HSM-backed signer (future step).
+    /// 32-byte seed hex (64 chars) for the dev signing key.
+    /// Required when `--constitution` is provided. Production must
+    /// replace this with an HSM-backed signer (future step).
     #[arg(long)]
     signer_seed_hex: Option<String>,
+
+    /// 32-byte bearer token (64 hex chars) required on every `/v1`
+    /// request as `Authorization: Bearer <hex>`. Constant-time
+    /// comparison. Read-only routes stay public.
+    ///
+    /// Generate one with `head -c 32 /dev/urandom | xxd -p -c 64`.
+    #[arg(long)]
+    bearer_token_hex: Option<String>,
+
+    /// Disable bearer-token auth on `/v1`. Mutually exclusive with
+    /// `--bearer-token-hex`. The binary prints a loud WARN on
+    /// startup; only use on loopback / a fully-trusted network
+    /// segment. Required for proposal mode when
+    /// `--bearer-token-hex` isn't supplied.
+    #[arg(long, default_value_t = false)]
+    insecure_no_auth: bool,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -133,6 +153,9 @@ async fn run_proposal_mode(c_path: &Path, args: &Args) -> Result<()> {
     let signer = Ed25519Signer::from_seed(&seed_digest.0);
     let issuer = signer.public_key();
 
+    // --- Resolve auth (safe-default: require one or the other) ---
+    let auth = build_auth_config(args)?;
+
     // --- Load the constitution ---
     let toml_src = std::fs::read_to_string(c_path)
         .with_context(|| format!("reading constitution {}", c_path.display()))?;
@@ -145,7 +168,7 @@ async fn run_proposal_mode(c_path: &Path, args: &Args) -> Result<()> {
     let state = ApiState::new(kernel, log.clone());
 
     // --- Build merged router ---
-    let api = api_router(state);
+    let api = api_router(state, auth.clone());
     let readonly = router(log.clone());
     let app: Router = readonly.merge(api);
 
@@ -158,10 +181,14 @@ async fn run_proposal_mode(c_path: &Path, args: &Args) -> Result<()> {
          (issuer {issuer_prefix}…) listening on http://{local}",
         c_path.display(),
     );
-    eprintln!(
-        "uniclaw-host: WARN /v1 proposal API is unauthenticated — \
-         keep this bound to loopback or a trusted network segment.",
-    );
+    if auth.requires_auth() {
+        eprintln!("uniclaw-host: /v1 proposal API requires Authorization: Bearer <token>");
+    } else {
+        eprintln!(
+            "uniclaw-host: WARN /v1 proposal API is UNAUTHENTICATED (--insecure-no-auth) — \
+             keep this bound to loopback or a fully-trusted network segment.",
+        );
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -267,4 +294,29 @@ fn pin_issuer_from_env() -> Result<PublicKey> {
     let bytes = uniclaw_receipt::Digest::from_hex(&s)
         .context("UNICLAW_HOST_ISSUER must be 64 hex characters")?;
     Ok(PublicKey(bytes.0))
+}
+
+/// Resolve proposal-mode auth from CLI flags. Safe default: one of
+/// `--bearer-token-hex` / `--insecure-no-auth` must be present, and
+/// they're mutually exclusive.
+fn build_auth_config(args: &Args) -> Result<AuthConfig> {
+    if args.bearer_token_hex.is_some() && args.insecure_no_auth {
+        bail!("--bearer-token-hex and --insecure-no-auth are mutually exclusive — pick one");
+    }
+    if let Some(token_hex) = args.bearer_token_hex.as_deref() {
+        let digest = uniclaw_receipt::Digest::from_hex(token_hex)
+            .context("--bearer-token-hex must be exactly 64 hex characters (32 bytes)")?;
+        let token = AuthConfig::with_token(digest.0.to_vec())
+            .context("invalid bearer token length")?;
+        return Ok(token);
+    }
+    if args.insecure_no_auth {
+        return Ok(AuthConfig::insecure());
+    }
+    bail!(
+        "proposal mode (--constitution) requires either \
+         --bearer-token-hex <64-hex> (recommended) or \
+         --insecure-no-auth (loopback / fully-trusted network only). \
+         Refusing to expose /v1 unauthenticated by default.",
+    );
 }
