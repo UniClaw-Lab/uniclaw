@@ -27,6 +27,7 @@ import type {
   DecisionBase,
   DeniedDecision,
   PendingDecision,
+  ToolExecutionInput,
   WireErrorBody,
   WireReceiptResponse,
 } from "./types.js";
@@ -106,6 +107,34 @@ export class UniclawClient {
     return decision;
   }
 
+  /// Record a completed external tool call into the chain.
+  /// `input.allowedReceiptId` must reference a previously-minted
+  /// `Allowed` proposal receipt whose `action.kind` begins with
+  /// `tool.`. The kernel re-verifies authenticity before honouring
+  /// the record; see `Kernel::handle_record_tool_execution`.
+  ///
+  /// Exactly one of `outputHash` / `error` must be set. See
+  /// [`ToolExecutionInput`] for the full payload shape.
+  ///
+  /// Returns an `AllowedDecision` — the `$kernel/tool/executed`
+  /// receipt is always minted with `decision: "allowed"` (the
+  /// receipt is an audit anchor for *what happened*, not a new
+  /// access-control decision).
+  async recordToolExecution(
+    input: ToolExecutionInput,
+    opts: EvaluateOptions = {},
+  ): Promise<AllowedDecision> {
+    const resp = await this.#postToolExecution(input);
+    const decision = this.#buildDecision(resp);
+    if (decision.kind !== "allowed") {
+      throw new Error(
+        `unexpected tool-execution response: kind=${decision.kind} (server bug?)`,
+      );
+    }
+    await this.#maybeVerify(decision, opts);
+    return decision;
+  }
+
   /// Fetch a receipt by content_id and verify it locally. Returns
   /// the full `VerifyResult` from `@uniclaw/verifier`.
   async verifyReceiptUrl(url: string): Promise<VerifyResult> {
@@ -169,6 +198,42 @@ export class UniclawClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw await this.#parseError(response);
+    }
+    return (await response.json()) as WireReceiptResponse;
+  }
+
+  async #postToolExecution(
+    input: ToolExecutionInput,
+  ): Promise<WireReceiptResponse> {
+    const url = `${this.#baseUrl}/v1/tool-executions`;
+    // Build the snake_case wire body. Omit absent optional fields
+    // entirely rather than emitting `null` — the server's
+    // `Option<...>` deserializer handles missing keys cleanly.
+    const wire: Record<string, unknown> = {
+      allowed_receipt_id: input.allowedReceiptId,
+    };
+    if (input.outputHash !== undefined) wire["output_hash"] = input.outputHash;
+    if (input.error !== undefined) wire["error"] = input.error;
+    if (input.secretsUsed !== undefined && input.secretsUsed.length > 0) {
+      wire["secrets_used"] = input.secretsUsed;
+    }
+    if (input.redaction !== undefined) {
+      wire["redaction"] = {
+        redacted_output_hash: input.redaction.redactedOutputHash,
+        stack_hash: input.redaction.stackHash,
+        matches: input.redaction.matches.map((m) => ({
+          rule_id: m.ruleId,
+          count: m.count,
+        })),
+      };
+    }
+    const response = await this.#fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(wire),
     });
     if (!response.ok) {
       throw await this.#parseError(response);

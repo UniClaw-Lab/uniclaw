@@ -17,6 +17,9 @@ export type {
   DecisionBase,
   DeniedDecision,
   PendingDecision,
+  RedactionReportInput,
+  RuleMatchInput,
+  ToolExecutionInput,
 } from "./types.js";
 
 // Re-export the verifier's result type for callers that consume

@@ -9,10 +9,11 @@
 //!
 //! ## Endpoints
 //!
-//! | Method | Path                                  | Mints                          |
-//! |--------|---------------------------------------|---------------------------------|
-//! | POST   | `/v1/proposals`                       | `evaluate_proposal` receipt     |
-//! | POST   | `/v1/approvals/{content_id}/resolve`  | `resolve_approval` receipt      |
+//! | Method | Path                                  | Mints                              |
+//! |--------|---------------------------------------|-------------------------------------|
+//! | POST   | `/v1/proposals`                       | `evaluate_proposal` receipt         |
+//! | POST   | `/v1/approvals/{content_id}/resolve`  | `resolve_approval` receipt          |
+//! | POST   | `/v1/tool-executions`                 | `$kernel/tool/executed` receipt     |
 //!
 //! Receipts produced here flow into the same in-memory log the
 //! read-only routes (`/receipts/<hash>`, step 9) serve from, so a
@@ -30,13 +31,14 @@
 //!
 //! ## Out of scope (queued)
 //!
-//! - `POST /v1/tool-executions` — record a tool execution with
-//!   optional `secret_used` + `redaction_applied` edges. The
-//!   redaction side of the wire format needs a careful design pass.
-//! - `POST /v1/secret-uses` — standalone secret-use events.
-//! - `POST /v1/redactions` — standalone redaction events.
 //! - `POST /v1/checkpoints` — `$kernel/chain/checkpointed` receipts
 //!   (step 19c).
+//! - Standalone `POST /v1/secret-uses` / `POST /v1/redactions`
+//!   endpoints. Today both kinds of audit fact ride on the
+//!   `POST /v1/tool-executions` payload (as `secrets_used: []` and
+//!   `redaction: {...}` fields). If a future Uniclaw release adds
+//!   detached secret-use or redaction events (i.e. events not tied
+//!   to a tool call), the standalone endpoints would land here.
 //! - Auth.
 
 use std::sync::{Arc, Mutex};
@@ -52,8 +54,13 @@ use tokio::sync::RwLock;
 
 use uniclaw_approval::ApprovalDecision;
 use uniclaw_constitution::InMemoryConstitution;
-use uniclaw_kernel::{Approval, Kernel, KernelError, KernelEvent, Proposal};
-use uniclaw_receipt::{Action, Decision, Digest, HexDecodeError, Receipt};
+use uniclaw_kernel::{
+    Approval, Kernel, KernelError, KernelEvent, Proposal, ToolError,
+    ToolExecution as KernelToolExecution, ToolMetadata, ToolOutput,
+};
+use uniclaw_receipt::{
+    Action, Decision, Digest, HexDecodeError, Receipt, RedactionReport, RuleMatch,
+};
 use uniclaw_store::{InMemoryReceiptLog, ReceiptLog};
 
 use crate::clock::SystemClock;
@@ -108,6 +115,7 @@ pub fn api_router(state: Arc<ApiState>) -> Router {
             "/v1/approvals/:content_id/resolve",
             post(post_resolve_approval),
         )
+        .route("/v1/tool-executions", post(post_tool_execution))
         .with_state(state)
 }
 
@@ -181,6 +189,63 @@ impl From<ResolveOutcome> for ApprovalDecision {
             ResolveOutcome::Denied => Self::Denied,
         }
     }
+}
+
+/// `POST /v1/tool-executions` request body.
+///
+/// Anchors a completed external tool call into the chain. Exactly
+/// one of `output_hash` / `error` must be set:
+///
+/// - `output_hash` (success): BLAKE3 of the tool's raw output
+///   bytes. The actual bytes never cross the kernel boundary —
+///   the kernel only records the hash + optional audit metadata.
+/// - `error` (failure): free-form message describing why the call
+///   failed. Surfaced as a `tool_execution_failure` provenance
+///   edge on the resulting receipt.
+///
+/// `secrets_used` lists the **reference names** of secrets the
+/// tool consumed (e.g. `"github.token"`). The kernel mints one
+/// `secret_used` provenance edge per name. Secret VALUES never
+/// cross any wire — neither to the kernel nor to the receipt.
+///
+/// `redaction`, when present, commits the receipt to a
+/// post-redaction `output_hash` and populates
+/// `body.redactor_stack_hash`. The kernel mints one
+/// `redaction_applied` provenance edge per rule with `count > 0`.
+/// The pre-redaction bytes never enter the kernel either.
+#[derive(Debug, Deserialize)]
+pub struct ToolExecutionRequest {
+    pub allowed_receipt_id: String,
+    /// Set on success. 64 hex chars (BLAKE3 of tool's output bytes).
+    pub output_hash: Option<String>,
+    /// Set on failure. Human-readable error message.
+    pub error: Option<String>,
+    /// Reference names of secrets the tool consumed. Optional;
+    /// defaults to empty when omitted.
+    #[serde(default)]
+    pub secrets_used: Vec<String>,
+    /// Optional redaction audit data. When present the kernel
+    /// uses `redaction.redacted_output_hash` as the receipt's
+    /// `output_hash` and populates `body.redactor_stack_hash`.
+    pub redaction: Option<RedactionWire>,
+}
+
+/// Wire shape for [`RedactionReport`]. Mirrors the Rust struct but
+/// uses hex-string digests so JSON clients can populate them
+/// without byte-array fiddling.
+#[derive(Debug, Deserialize)]
+pub struct RedactionWire {
+    pub redacted_output_hash: String,
+    #[serde(default)]
+    pub matches: Vec<RuleMatchWire>,
+    pub stack_hash: String,
+}
+
+/// One redactor rule's match count.
+#[derive(Debug, Deserialize)]
+pub struct RuleMatchWire {
+    pub rule_id: String,
+    pub count: u32,
 }
 
 // ---------------------------------------------------------------------
@@ -300,6 +365,123 @@ pub async fn post_resolve_approval(
         response: req.outcome.into(),
     };
     let event = KernelEvent::resolve(approval);
+
+    let receipt = handle_event(&state, event).await?;
+    Ok(Json(receipt_response(&receipt)))
+}
+
+/// `POST /v1/tool-executions`
+///
+/// Record a completed external tool call against a previously-
+/// minted Allowed receipt. The kernel re-verifies the prior
+/// receipt's authenticity (signature, issuer, decision-is-Allowed,
+/// action-kind-starts-with-`"tool."`) before honoring the record;
+/// see `Kernel::handle_record_tool_execution` for the gate.
+pub async fn post_tool_execution(
+    State(state): State<Arc<ApiState>>,
+    Json(req): Json<ToolExecutionRequest>,
+) -> Result<Json<ReceiptResponse>, ApiError> {
+    // --- Input validation -------------------------------------------------
+
+    let allowed_id = parse_digest(&req.allowed_receipt_id, "allowed_receipt_id")?;
+    if req.output_hash.is_some() && req.error.is_some() {
+        return Err(ApiError::BadRequest(
+            "exactly one of output_hash or error must be set, not both".into(),
+        ));
+    }
+    if req.output_hash.is_none() && req.error.is_none() {
+        return Err(ApiError::BadRequest(
+            "exactly one of output_hash or error must be set".into(),
+        ));
+    }
+
+    // --- Look up the prior Allowed receipt -------------------------------
+
+    let allowed_receipt = {
+        let log = state.log.read().await;
+        log.get_by_id(&allowed_id).ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "no receipt with content_id {}",
+                req.allowed_receipt_id
+            ))
+        })?
+    };
+
+    // Cheap up-front rejection: the kernel would also reject these,
+    // but we can return a clearer error before submitting the event.
+    if allowed_receipt.body.decision != Decision::Allowed {
+        return Err(ApiError::Conflict(format!(
+            "receipt {} is in state {:?}, not Allowed",
+            req.allowed_receipt_id, allowed_receipt.body.decision
+        )));
+    }
+    if !allowed_receipt.body.action.kind.starts_with("tool.") {
+        return Err(ApiError::Conflict(format!(
+            "receipt {} action.kind {:?} does not start with \"tool.\"",
+            req.allowed_receipt_id, allowed_receipt.body.action.kind,
+        )));
+    }
+
+    // --- Build the kernel event ------------------------------------------
+
+    let original_proposal = Proposal::unbounded(
+        allowed_receipt.body.action.clone(),
+        Decision::Allowed,
+        allowed_receipt.body.constitution_rules.clone(),
+        allowed_receipt.body.provenance.clone(),
+    );
+
+    let result: Result<ToolOutput, ToolError> = if let Some(hash_hex) = req.output_hash.as_ref() {
+        let output_hash = parse_digest(hash_hex, "output_hash")?;
+        Ok(ToolOutput {
+            // The kernel only reads `output_hash` and `metadata`;
+            // bytes are not used (and the agent runtime owns them
+            // anyway). Empty `bytes` keeps the HTTP wire compact.
+            bytes: Vec::new(),
+            output_hash,
+            metadata: ToolMetadata {
+                secrets_used: req.secrets_used.clone(),
+            },
+        })
+    } else {
+        // `error` is set (we validated up-front that exactly one of
+        // output_hash/error is present). v1 maps every error to
+        // `ToolError::Failed(message)`; richer variants (Timeout,
+        // CapabilityDenied, NotFound, InvalidInput) can be added
+        // to the wire later by introducing an optional `error_kind`
+        // field.
+        let msg = req.error.clone().unwrap_or_default();
+        Err(ToolError::Failed(msg))
+    };
+
+    let redaction = if let Some(r) = req.redaction.as_ref() {
+        let redacted_output_hash =
+            parse_digest(&r.redacted_output_hash, "redaction.redacted_output_hash")?;
+        let stack_hash = parse_digest(&r.stack_hash, "redaction.stack_hash")?;
+        let matches = r
+            .matches
+            .iter()
+            .map(|m| RuleMatch {
+                rule_id: m.rule_id.clone(),
+                count: m.count,
+            })
+            .collect();
+        Some(RedactionReport {
+            redacted_output_hash,
+            matches,
+            stack_hash,
+        })
+    } else {
+        None
+    };
+
+    let execution = KernelToolExecution {
+        allowed_receipt,
+        original_proposal,
+        result,
+        redaction,
+    };
+    let event = KernelEvent::record_tool_execution(execution);
 
     let receipt = handle_event(&state, event).await?;
     Ok(Json(receipt_response(&receipt)))

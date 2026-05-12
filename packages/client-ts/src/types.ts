@@ -12,6 +12,44 @@ export interface Action {
   inputHash: string;
 }
 
+/// Payload for `client.recordToolExecution(...)`. Exactly one of
+/// `outputHash` / `error` must be set:
+///
+/// - `outputHash` (success): 64 hex chars (BLAKE3 of the tool's
+///   raw output bytes). The actual bytes never enter the kernel
+///   or the receipt — only the hash + audit metadata.
+/// - `error` (failure): free-form human-readable message.
+///
+/// `secretsUsed` lists the REFERENCE NAMES of secrets consumed
+/// during the call. Values never cross any wire — neither to the
+/// kernel nor to the receipt. Defaults to empty.
+///
+/// `redaction`, when set, commits the receipt to a post-redaction
+/// `outputHash` and populates `body.redactor_stack_hash`. The
+/// kernel mints one `redaction_applied` provenance edge per rule
+/// with `count > 0`.
+export interface ToolExecutionInput {
+  allowedReceiptId: string;
+  outputHash?: string;
+  error?: string;
+  secretsUsed?: string[];
+  redaction?: RedactionReportInput;
+}
+
+/// Wire-equivalent of the kernel's `RedactionReport` (step 18).
+/// Caller produces this from whatever redactor it ran over the
+/// tool's output bytes before submitting the execution event.
+export interface RedactionReportInput {
+  redactedOutputHash: string;
+  matches: RuleMatchInput[];
+  stackHash: string;
+}
+
+export interface RuleMatchInput {
+  ruleId: string;
+  count: number;
+}
+
 /// Fields common to every minted decision. `receiptUrl` is an
 /// absolute URL (the client joins the server's relative
 /// `/receipts/<hash>` against the configured `baseUrl`).

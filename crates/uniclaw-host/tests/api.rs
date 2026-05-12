@@ -412,3 +412,352 @@ async fn three_proposals_chain_with_incrementing_sequence_and_prev_hash() {
         last_hash = Some(full.body.merkle_leaf.leaf_hash.to_hex());
     }
 }
+
+// ---------------------------------------------------------------------
+// POST /v1/tool-executions (step 23)
+// ---------------------------------------------------------------------
+
+/// Helper: mint an Allowed `tool.*` receipt so we have something to
+/// record an execution against. Returns its `content_id`.
+async fn mint_allowed_tool_receipt(app: &Router, target: &str) -> String {
+    let req = json_request(
+        "/v1/proposals",
+        &json!({
+            "action": {
+                "kind": "tool.http_fetch",
+                "target": target,
+                "input_hash": "00".repeat(32),
+            }
+        }),
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let r: ReceiptResponse = body_as(resp).await;
+    assert_eq!(r.decision, "allowed");
+    r.content_id
+}
+
+#[tokio::test]
+async fn tool_execution_success_no_redaction_no_secrets_links_to_allowed() {
+    let app = build_app();
+    let allowed_id = mint_allowed_tool_receipt(&app, "https://api.example.com/data").await;
+
+    // Fetch the Allowed receipt's leaf_hash so we can assert linkage.
+    let fetch_allowed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/receipts/{allowed_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let allowed_full: Receipt = body_as(fetch_allowed).await;
+    let expected_prev = allowed_full.body.merkle_leaf.leaf_hash.to_hex();
+
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": allowed_id,
+            "output_hash": "11".repeat(32),
+        }),
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let r: ReceiptResponse = body_as(resp).await;
+    assert_eq!(r.decision, "allowed");
+    assert_eq!(r.sequence, 1);
+    assert_eq!(r.schema_version, 2);
+
+    let fetch = app
+        .oneshot(
+            Request::builder()
+                .uri(&r.receipt_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let full: Receipt = body_as(fetch).await;
+    crypto::verify(&full).expect("execution receipt verifies");
+    assert_eq!(
+        full.body.merkle_leaf.prev_hash.to_hex(),
+        expected_prev,
+        "execution.prev_hash must equal allowed.leaf_hash",
+    );
+    assert_eq!(full.body.action.kind, "$kernel/tool/executed");
+    assert!(full.body.action.target.contains("tool=http_fetch"));
+    assert!(full.body.action.target.contains("status=ok"));
+    assert!(full.body.redactor_stack_hash.is_none());
+}
+
+#[tokio::test]
+async fn tool_execution_with_secrets_used_emits_secret_used_edges() {
+    let app = build_app();
+    let allowed_id = mint_allowed_tool_receipt(&app, "https://api.example.com/me").await;
+
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": allowed_id,
+            "output_hash": "22".repeat(32),
+            "secrets_used": ["github.token", "slack.webhook"],
+        }),
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let r: ReceiptResponse = body_as(resp).await;
+
+    let fetch = app
+        .oneshot(
+            Request::builder()
+                .uri(&r.receipt_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let full: Receipt = body_as(fetch).await;
+    let secret_edges: Vec<_> = full
+        .body
+        .provenance
+        .iter()
+        .filter(|e| e.kind == "secret_used")
+        .collect();
+    assert_eq!(secret_edges.len(), 2);
+    assert!(secret_edges.iter().any(|e| e.to == "secret:github.token"));
+    assert!(secret_edges.iter().any(|e| e.to == "secret:slack.webhook"));
+}
+
+#[tokio::test]
+async fn tool_execution_with_redaction_populates_stack_hash_and_emits_edges() {
+    let app = build_app();
+    let allowed_id = mint_allowed_tool_receipt(&app, "https://api.example.com/dump").await;
+
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": allowed_id,
+            "output_hash": "33".repeat(32),
+            "redaction": {
+                "redacted_output_hash": "44".repeat(32),
+                "matches": [
+                    {"rule_id": "github_pat", "count": 1},
+                    {"rule_id": "openai_key", "count": 0}
+                ],
+                "stack_hash": "ab".repeat(32),
+            }
+        }),
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let r: ReceiptResponse = body_as(resp).await;
+
+    let fetch = app
+        .oneshot(
+            Request::builder()
+                .uri(&r.receipt_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let full: Receipt = body_as(fetch).await;
+
+    // redactor_stack_hash populated.
+    let stack = full
+        .body
+        .redactor_stack_hash
+        .expect("redactor_stack_hash must be set");
+    assert_eq!(stack.to_hex(), "ab".repeat(32));
+
+    // Only the count>0 rule emits a redaction_applied edge.
+    let redact_edges: Vec<_> = full
+        .body
+        .provenance
+        .iter()
+        .filter(|e| e.kind == "redaction_applied")
+        .collect();
+    assert_eq!(redact_edges.len(), 1);
+    assert!(redact_edges[0].to.contains("github_pat:count=1"));
+
+    // tool_output edge commits to the POST-redaction hash.
+    let out_edges: Vec<_> = full
+        .body
+        .provenance
+        .iter()
+        .filter(|e| e.kind == "tool_output")
+        .collect();
+    assert_eq!(out_edges.len(), 1);
+    assert!(
+        out_edges[0].to.ends_with(&"44".repeat(32)),
+        "tool_output edge should reference redacted hash, got {}",
+        out_edges[0].to,
+    );
+}
+
+#[tokio::test]
+async fn tool_execution_failure_emits_failure_edge() {
+    let app = build_app();
+    let allowed_id = mint_allowed_tool_receipt(&app, "https://api.example.com/err").await;
+
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": allowed_id,
+            "error": "connection refused",
+        }),
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let r: ReceiptResponse = body_as(resp).await;
+    assert_eq!(r.decision, "allowed"); // failure receipts are still Allowed (audit anchor)
+
+    let fetch = app
+        .oneshot(
+            Request::builder()
+                .uri(&r.receipt_url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let full: Receipt = body_as(fetch).await;
+    assert!(full.body.action.target.contains("status=failed"));
+    let failure_edges: Vec<_> = full
+        .body
+        .provenance
+        .iter()
+        .filter(|e| e.kind == "tool_execution_failure")
+        .collect();
+    assert_eq!(failure_edges.len(), 1);
+    assert!(
+        failure_edges[0].to.contains("connection refused"),
+        "failure edge should embed the error message, got {}",
+        failure_edges[0].to,
+    );
+}
+
+#[tokio::test]
+async fn tool_execution_missing_both_output_and_error_returns_400() {
+    let app = build_app();
+    let allowed_id = mint_allowed_tool_receipt(&app, "https://api.example.com/x").await;
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({ "allowed_receipt_id": allowed_id }),
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "bad_request");
+}
+
+#[tokio::test]
+async fn tool_execution_both_output_and_error_returns_400() {
+    let app = build_app();
+    let allowed_id = mint_allowed_tool_receipt(&app, "https://api.example.com/x").await;
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": allowed_id,
+            "output_hash": "11".repeat(32),
+            "error": "boom",
+        }),
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn tool_execution_malformed_hex_returns_400() {
+    let app = build_app();
+    let allowed_id = mint_allowed_tool_receipt(&app, "https://api.example.com/x").await;
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": allowed_id,
+            "output_hash": "not-hex",
+        }),
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert!(body["detail"].as_str().unwrap().contains("output_hash"));
+}
+
+#[tokio::test]
+async fn tool_execution_unknown_allowed_id_returns_404() {
+    let app = build_app();
+    let unknown = "ab".repeat(32);
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": unknown,
+            "output_hash": "11".repeat(32),
+        }),
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn tool_execution_against_non_allowed_receipt_returns_409() {
+    let app = build_app();
+
+    // Mint a Pending receipt (constitution forces it on /admin/).
+    let req = json_request(
+        "/v1/proposals",
+        &json!({
+            "action": {
+                "kind": "http.fetch",
+                "target": "https://example.com/admin/keys",
+                "input_hash": "00".repeat(32),
+            }
+        }),
+    );
+    let pending: ReceiptResponse = body_as(app.clone().oneshot(req).await.unwrap()).await;
+    assert_eq!(pending.decision, "pending");
+
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": pending.content_id,
+            "output_hash": "11".repeat(32),
+        }),
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = body_json(resp).await;
+    assert!(body["detail"].as_str().unwrap().contains("not Allowed"));
+}
+
+#[tokio::test]
+async fn tool_execution_against_non_tool_action_returns_409() {
+    let app = build_app();
+
+    // Mint an Allowed http.fetch (NOT tool.*) receipt.
+    let req = json_request(
+        "/v1/proposals",
+        &json!({
+            "action": {
+                "kind": "http.fetch",
+                "target": "https://example.com/data",
+                "input_hash": "00".repeat(32),
+            }
+        }),
+    );
+    let allowed: ReceiptResponse = body_as(app.clone().oneshot(req).await.unwrap()).await;
+
+    let req = json_request(
+        "/v1/tool-executions",
+        &json!({
+            "allowed_receipt_id": allowed.content_id,
+            "output_hash": "11".repeat(32),
+        }),
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = body_json(resp).await;
+    assert!(body["detail"].as_str().unwrap().contains("tool."));
+}

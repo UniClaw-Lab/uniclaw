@@ -12,6 +12,85 @@ format change history.
 
 ### Added
 
+- **Tool-execution API** (Phase 3.5 / step 23) —
+  `POST /v1/tool-executions` on `uniclaw-host`, plus
+  `client.recordToolExecution(...)` on `@uniclaw/client`. Closes
+  the half-shipped integration story from steps 21+22: every
+  step of an agent action is now anchorable from any non-Rust
+  runtime, with no embedded kernel.
+  - **Wire format.** The request body carries the prior Allowed
+    receipt's `content_id`, exactly one of `output_hash` (success,
+    BLAKE3 hex of the tool's output bytes) or `error` (failure
+    message), plus optional `secrets_used: string[]` (reference
+    names — never values) and optional `redaction: {
+    redacted_output_hash, matches, stack_hash }`. The response is
+    the standard `ReceiptResponse` shape with
+    `decision: "allowed"` and `action.kind:
+    "$kernel/tool/executed"`.
+  - **One endpoint, three semantics.** Tool-executions, secret-
+    uses, and redactions ride on the same payload because the
+    kernel collapses them into one event with optional fields.
+    Standalone `/v1/secret-uses` / `/v1/redactions` endpoints
+    can land later if a detached-event use case appears.
+  - **Server side** (`crates/uniclaw-host/src/api.rs`): new
+    `post_tool_execution` handler. Looks up the Allowed receipt,
+    rejects 400 on missing/both-set output_hash/error, 404 on
+    unknown id, 409 on non-Allowed receipt or non-`tool.*`
+    action. Reconstructs the original `Proposal` from the
+    receipt body so the kernel's authenticity gate runs. The
+    handler builds a synthetic `ToolOutput` (empty `bytes` —
+    the kernel never reads them) or `ToolError::Failed(message)`,
+    plus the optional `RedactionReport`. `KernelEvent::record_tool_execution`
+    re-verifies every gate (signature, issuer, decision-is-Allowed,
+    action-match) before minting.
+  - **Client side** (`packages/client-ts/src/client.ts`): new
+    `UniclawClient.recordToolExecution(input, opts?)` method.
+    Returns `AllowedDecision` (the receipt is an audit anchor,
+    not a new access-control decision; always `decision: "allowed"`).
+    Verify-by-default applies the same way as `evaluate()`.
+    Wire-shape conversion (camelCase ↔ snake_case) happens at
+    the boundary; absent optional fields are omitted from the
+    wire body.
+  - **New types in `@uniclaw/client`:** `ToolExecutionInput`,
+    `RedactionReportInput`, `RuleMatchInput`. Re-exported from
+    `index.ts`.
+  - **Tests:**
+    - **10 new Rust integration tests** in
+      `crates/uniclaw-host/tests/api.rs`: success path with chain
+      linkage assertion (`prev_hash` of execution =
+      `leaf_hash` of allowed); `secrets_used` emits one
+      `secret_used` edge per name; `redaction` populates
+      `body.redactor_stack_hash` AND emits `redaction_applied`
+      edges only for `count > 0` rules AND the `tool_output`
+      edge references the POST-redaction hash; failure path
+      emits a `tool_execution_failure` edge; 400 on
+      missing-both / both-set / malformed hex; 404 on unknown
+      id; 409 on non-Allowed / non-`tool.*`.
+    - **9 new TS unit tests** in `packages/client-ts/tests/client.test.ts`:
+      wire-shape conversion, redaction camelCase ↔ snake_case,
+      `secrets_used: []` omission, error mapping
+      (400/404/409), unexpected-decision narrowing failure.
+    - **3 new TS integration tests** against the live binary:
+      full propose → record → verify-chain flow with secrets +
+      redaction asserting all expected provenance edges;
+      409 when recording against a non-`tool.*` Allowed; failure
+      path with cold verification.
+    - **408/408 Rust tests** (+10), **36/36 TS tests** (+12).
+  - **Bench (`bench-results/23-tool-execution-api.txt`):**
+    - `client.recordToolExecution verify=false`: **3.11 ms/req**
+      (slightly faster than `evaluate verify=false` at 5.34 ms —
+      smaller wire body, no Constitution re-run).
+    - Full propose+record chain (both calls verify=true):
+      **20.6 ms/req**. Two HTTP round-trips for mints + two for
+      verifies — acceptable for any realistic agent action.
+  - **What this step does NOT ship:** richer `ToolError`
+    variants on the wire (v1 maps all errors to
+    `ToolError::Failed(message)`; `Timeout` / `CapabilityDenied`
+    / `NotFound` / `InvalidInput` will land via an optional
+    `error_kind` field in a future PR); standalone
+    `/v1/secret-uses` / `/v1/redactions` endpoints; chain-
+    checkpoint endpoint (queued as step 19c); authentication.
+
 - **`@uniclaw/client` TypeScript SDK** (Phase 3.5 / step 22)
   — new top-level `packages/client-ts/` (second JS/TS package;
   workspace stays at 17 of 20 Rust crates). The on-ramp for any
