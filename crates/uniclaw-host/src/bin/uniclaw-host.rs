@@ -306,8 +306,8 @@ fn build_auth_config(args: &Args) -> Result<AuthConfig> {
     if let Some(token_hex) = args.bearer_token_hex.as_deref() {
         let digest = uniclaw_receipt::Digest::from_hex(token_hex)
             .context("--bearer-token-hex must be exactly 64 hex characters (32 bytes)")?;
-        let token = AuthConfig::with_token(digest.0.to_vec())
-            .context("invalid bearer token length")?;
+        let token =
+            AuthConfig::with_token(digest.0.to_vec()).context("invalid bearer token length")?;
         return Ok(token);
     }
     if args.insecure_no_auth {
