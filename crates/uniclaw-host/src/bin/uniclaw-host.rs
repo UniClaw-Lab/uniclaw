@@ -35,8 +35,7 @@ use clap::{ArgGroup, Parser};
 use tokio::sync::RwLock;
 
 use uniclaw_constitution::parse_toml;
-use uniclaw_host::api::{ApiState, AuthConfig, api_router};
-use uniclaw_host::clock::SystemClock;
+use uniclaw_host::api::{ApiState, AuthConfig, api_router, build_kernel_from_log};
 use uniclaw_host::router;
 use uniclaw_host::signer::Ed25519Signer;
 use uniclaw_kernel::Signer;
@@ -57,11 +56,15 @@ use uniclaw_store_sqlite::SqliteReceiptLog;
 ))]
 struct Args {
     /// Persistent SQLite-backed receipt log. Survives restarts.
-    /// On first run set `UNICLAW_HOST_ISSUER=<64-hex>` to pin the log.
     ///
-    /// **Cannot be combined with `--constitution`** — the proposal
-    /// API uses an in-memory log so the kernel can append directly.
-    /// Persistence for proposal mode is a future-step.
+    /// In **read-only mode** (no `--constitution`): on first run
+    /// set `UNICLAW_HOST_ISSUER=<64-hex>` to pin the log.
+    ///
+    /// In **proposal mode** (`--constitution`, step 26 onward):
+    /// the issuer is pinned to the kernel's signing key. Fresh
+    /// DB = pin to the kernel pubkey. Existing DB = the kernel
+    /// pubkey MUST match the DB's pinned issuer; the binary
+    /// refuses to start otherwise (chain integrity).
     #[arg(long)]
     db: Option<PathBuf>,
 
@@ -126,13 +129,6 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     if let Some(c_path) = args.constitution.as_deref() {
-        if args.db.is_some() {
-            bail!(
-                "--constitution is incompatible with --db: \
-                 proposal mode uses an in-memory log; persistent storage \
-                 for minted receipts is a future-step",
-            );
-        }
         run_proposal_mode(c_path, &args).await
     } else if let Some(db_path) = args.db.as_deref() {
         let issuer = read_or_require_issuer(db_path)?;
@@ -175,22 +171,99 @@ async fn run_proposal_mode(c_path: &Path, args: &Args) -> Result<()> {
     let constitution = parse_toml(&toml_src)
         .with_context(|| format!("parsing constitution {}", c_path.display()))?;
 
-    // --- Wire kernel + shared log ---
-    let kernel = uniclaw_kernel::Kernel::new(signer, SystemClock, constitution);
-    let log = Arc::new(RwLock::new(InMemoryReceiptLog::new(issuer)));
+    // --- Pick the log backend (step 26: persistent if --db) ---
+    if let Some(db_path) = args.db.as_deref() {
+        // Persistent (SQLite-backed) proposal mode. Reconcile the
+        // kernel's pubkey with the DB's pinned issuer:
+        // - Fresh DB: pin to the kernel pubkey now.
+        // - Existing DB: kernel pubkey MUST match the pinned issuer
+        //   (chain integrity). The kernel won't be able to append
+        //   under another issuer anyway, but we fail fast at
+        //   startup with a clear error rather than producing a
+        //   confusing AppendError later.
+        if let Some(existing) = SqliteReceiptLog::peek_issuer(db_path)
+            .context("inspecting existing SQLite log for pinned issuer")?
+            && existing != issuer
+        {
+            let existing_prefix = issuer_prefix(&existing);
+            let kernel_prefix = issuer_prefix(&issuer);
+            bail!(
+                "kernel signing key (issuer {kernel_prefix}…) does not match the \
+                 pinned issuer of the SQLite log at {} (issuer {existing_prefix}…). \
+                 Refusing to fork the chain. Use the original signing seed, or \
+                 start a new DB at a different path.",
+                db_path.display(),
+            );
+        }
+        let log = SqliteReceiptLog::open(db_path, issuer)
+            .with_context(|| format!("opening SQLite log at {}", db_path.display()))?;
+        let source = db_path.display().to_string();
+        serve_proposal_mode(
+            "sqlite",
+            &source,
+            c_path,
+            signer,
+            constitution,
+            log,
+            issuer,
+            auth,
+            args.bind,
+        )
+        .await
+    } else {
+        // Default: in-memory log (existing pre-step-26 behavior;
+        // restart loses the chain).
+        let log = InMemoryReceiptLog::new(issuer);
+        serve_proposal_mode(
+            "in-memory",
+            "transient",
+            c_path,
+            signer,
+            constitution,
+            log,
+            issuer,
+            auth,
+            args.bind,
+        )
+        .await
+    }
+}
+
+/// Serve proposal-mode requests against a concrete log backend.
+/// Generic over `L` so the same wiring works for `InMemoryReceiptLog`
+/// (transient) and `SqliteReceiptLog` (persistent, step 26).
+#[allow(clippy::too_many_arguments)]
+async fn serve_proposal_mode<L>(
+    backend: &str,
+    source: &str,
+    c_path: &Path,
+    signer: Ed25519Signer,
+    constitution: uniclaw_constitution::InMemoryConstitution,
+    log: L,
+    issuer: PublicKey,
+    auth: uniclaw_host::api::AuthConfig,
+    bind: SocketAddr,
+) -> Result<()>
+where
+    L: ReceiptLog + Send + Sync + 'static,
+{
+    // Step 26: resume kernel state from the log's head when the log
+    // is non-empty (SQLite-backed persistence path). Empty log →
+    // genesis state (existing in-memory behavior, byte-identical).
+    let kernel = build_kernel_from_log(&log, signer, constitution);
+    let log = Arc::new(RwLock::new(log));
     let state = ApiState::new(kernel, log.clone());
 
-    // --- Build merged router ---
     let api = api_router(state, auth.clone());
     let readonly = router(log.clone());
     let app: Router = readonly.merge(api);
 
-    let listener = tokio::net::TcpListener::bind(args.bind).await?;
+    let listener = tokio::net::TcpListener::bind(bind).await?;
     let local = listener.local_addr()?;
     let issuer_prefix = issuer_prefix(&issuer);
 
     eprintln!(
-        "uniclaw-host: backend=in-memory constitution={} \
+        "uniclaw-host: backend={backend} source={source} constitution={} \
          (issuer {issuer_prefix}…) listening on http://{local}",
         c_path.display(),
     );

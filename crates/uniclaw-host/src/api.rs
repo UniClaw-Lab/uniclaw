@@ -68,13 +68,13 @@ use tokio::sync::RwLock;
 use uniclaw_approval::ApprovalDecision;
 use uniclaw_constitution::InMemoryConstitution;
 use uniclaw_kernel::{
-    Approval, Kernel, KernelError, KernelEvent, Proposal, ToolError,
+    Approval, Kernel, KernelError, KernelEvent, KernelState, Proposal, ToolError,
     ToolExecution as KernelToolExecution, ToolMetadata, ToolOutput,
 };
 use uniclaw_receipt::{
     Action, Decision, Digest, HexDecodeError, Receipt, RedactionReport, RuleMatch,
 };
-use uniclaw_store::{InMemoryReceiptLog, ReceiptLog};
+use uniclaw_store::ReceiptLog;
 
 use crate::clock::SystemClock;
 use crate::signer::Ed25519Signer;
@@ -82,39 +82,81 @@ use crate::signer::Ed25519Signer;
 /// Concrete kernel type used by the HTTP API.
 ///
 /// The kernel itself is generic; binding it to one tuple here keeps
-/// the `ApiState` non-generic so axum's state extractor stays simple
-/// and dyn-dispatch is unnecessary. Future deployments wanting a
-/// different signer (HSM) or constitution implementation will add a
-/// new alias rather than parameterizing every handler.
+/// the kernel side of `ApiState` simple. The log side IS generic
+/// (since step 26) — see [`ApiState`].
 pub type ApiKernel = Kernel<Ed25519Signer, SystemClock, InMemoryConstitution>;
 
 /// State shared by the proposal + approval handlers, *and* the
 /// read-only route handlers (step 9) when both are mounted on the
 /// same server.
 ///
+/// Generic over `L: ReceiptLog + Send + Sync + 'static` (since step
+/// 26): the binary picks `ApiState<InMemoryReceiptLog>` for the
+/// existing transient mode and `ApiState<SqliteReceiptLog>` for the
+/// new persistent mode (`--constitution` + `--db <path>`). The
+/// read-only `router<L>(log)` is already generic over the same
+/// trait, so the patterns line up.
+///
 /// - `kernel` is wrapped in a `std::sync::Mutex` because the
 ///   critical section is short and synchronous — the handler calls
 ///   `Kernel::handle` and never `.await`s while holding the lock.
 ///   Std-mutex is the correct primitive for that shape.
-/// - `log` reuses the same `tokio::sync::RwLock<InMemoryReceiptLog>`
-///   the read-only `router(log)` consumes. The API takes a write
-///   lock around `append`; the read-only routes take a read lock
-///   around `get_by_id`. Sharing the lock makes minted receipts
+/// - `log` reuses the same `tokio::sync::RwLock<L>` the read-only
+///   `router(log)` consumes. The API takes a write lock around
+///   `append`; the read-only routes take a read lock around
+///   `get_by_id`. Sharing the lock makes minted receipts
 ///   immediately fetchable at `/receipts/<hash>`.
 #[derive(Debug)]
-pub struct ApiState {
+pub struct ApiState<L: ReceiptLog + Send + Sync + 'static> {
     pub kernel: Mutex<ApiKernel>,
-    pub log: Arc<RwLock<InMemoryReceiptLog>>,
+    pub log: Arc<RwLock<L>>,
 }
 
-impl ApiState {
+impl<L: ReceiptLog + Send + Sync + 'static> ApiState<L> {
     /// Wire a kernel + shared log into an Arc-wrapped state.
     #[must_use]
-    pub fn new(kernel: ApiKernel, log: Arc<RwLock<InMemoryReceiptLog>>) -> Arc<Self> {
+    pub fn new(kernel: ApiKernel, log: Arc<RwLock<L>>) -> Arc<Self> {
         Arc::new(Self {
             kernel: Mutex::new(kernel),
             log,
         })
+    }
+}
+
+/// Build an [`ApiKernel`] whose state continues from the log's
+/// current head (step 26).
+///
+/// - **Empty log**: returns `Kernel::new(signer, SystemClock,
+///   constitution)` — the genesis state (`sequence = 0`, zero
+///   `prev_hash`). Behavior is identical to pre-step-26 hosts.
+/// - **Non-empty log**: peeks `log.last()` and builds a
+///   `KernelState` whose `sequence` is `last.sequence + 1` and
+///   `prev_hash` is `last.leaf_hash`, then calls
+///   `Kernel::resume(state, ...)`. The next minted receipt links
+///   continuously to the persisted chain.
+///
+/// Without this helper, a fresh `Kernel::new` against a populated
+/// log mints at `sequence = 0` again, which the log rejects with
+/// `AppendError::OutOfOrder`. The binary + tests use this helper
+/// after re-opening a `SqliteReceiptLog`.
+#[must_use]
+pub fn build_kernel_from_log<L>(
+    log: &L,
+    signer: Ed25519Signer,
+    constitution: InMemoryConstitution,
+) -> ApiKernel
+where
+    L: ReceiptLog,
+{
+    match log.last() {
+        Some(last) => {
+            let state = KernelState {
+                sequence: last.body.merkle_leaf.sequence.saturating_add(1),
+                prev_hash: last.body.merkle_leaf.leaf_hash,
+            };
+            Kernel::resume(state, signer, SystemClock, constitution)
+        }
+        None => Kernel::new(signer, SystemClock, constitution),
     }
 }
 
@@ -198,15 +240,18 @@ impl AuthConfig {
 /// `auth` controls whether the `/v1` routes require a bearer token.
 /// Read-only routes (mounted by [`crate::router`]) are always
 /// public and are not affected by this config.
-pub fn api_router(state: Arc<ApiState>, auth: AuthConfig) -> Router {
+pub fn api_router<L>(state: Arc<ApiState<L>>, auth: AuthConfig) -> Router
+where
+    L: ReceiptLog + Send + Sync + 'static,
+{
     let auth = Arc::new(auth);
     let mut routes = Router::new()
-        .route("/v1/proposals", post(post_proposal))
+        .route("/v1/proposals", post(post_proposal::<L>))
         .route(
             "/v1/approvals/:content_id/resolve",
-            post(post_resolve_approval),
+            post(post_resolve_approval::<L>),
         )
-        .route("/v1/tool-executions", post(post_tool_execution))
+        .route("/v1/tool-executions", post(post_tool_execution::<L>))
         .with_state(state);
     if auth.requires_auth() {
         // Only install the middleware when auth is actually required.
@@ -478,8 +523,8 @@ impl IntoResponse for ApiError {
 /// not configurable through the API; all proposals are "unbounded"
 /// — the kernel never charges a lease). The minted receipt is
 /// immediately appended to the log and fetchable at `receipt_url`.
-pub async fn post_proposal(
-    State(state): State<Arc<ApiState>>,
+pub async fn post_proposal<L: ReceiptLog + Send + Sync + 'static>(
+    State(state): State<Arc<ApiState<L>>>,
     Json(req): Json<ProposeRequest>,
 ) -> Result<Json<ReceiptResponse>, ApiError> {
     let action = parse_action(req.action)?;
@@ -495,8 +540,8 @@ pub async fn post_proposal(
 /// Resolve a pending receipt. The kernel re-verifies the pending
 /// receipt's signature and decision before honoring the resolve;
 /// see `Kernel::handle_resolve_approval` for the gate.
-pub async fn post_resolve_approval(
-    State(state): State<Arc<ApiState>>,
+pub async fn post_resolve_approval<L: ReceiptLog + Send + Sync + 'static>(
+    State(state): State<Arc<ApiState<L>>>,
     Path(content_id): Path<String>,
     Json(req): Json<ResolveApprovalRequest>,
 ) -> Result<Json<ReceiptResponse>, ApiError> {
@@ -551,8 +596,8 @@ pub async fn post_resolve_approval(
 /// receipt's authenticity (signature, issuer, decision-is-Allowed,
 /// action-kind-starts-with-`"tool."`) before honoring the record;
 /// see `Kernel::handle_record_tool_execution` for the gate.
-pub async fn post_tool_execution(
-    State(state): State<Arc<ApiState>>,
+pub async fn post_tool_execution<L: ReceiptLog + Send + Sync + 'static>(
+    State(state): State<Arc<ApiState<L>>>,
     Json(req): Json<ToolExecutionRequest>,
 ) -> Result<Json<ReceiptResponse>, ApiError> {
     // --- Input validation -------------------------------------------------
@@ -672,7 +717,10 @@ pub async fn post_tool_execution(
 /// Lock order: `kernel` (sync) → `log` (async). The kernel lock is
 /// released before we await the log write lock; nothing else holds
 /// the log lock for long enough to matter.
-async fn handle_event(state: &ApiState, event: KernelEvent) -> Result<Receipt, ApiError> {
+async fn handle_event<L: ReceiptLog + Send + Sync + 'static>(
+    state: &ApiState<L>,
+    event: KernelEvent,
+) -> Result<Receipt, ApiError> {
     // Step 1: drive the kernel under its sync mutex. Critical
     // section is bounded by `Kernel::handle`, which doesn't await
     // or block on external I/O.

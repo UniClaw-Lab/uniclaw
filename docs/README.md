@@ -51,6 +51,7 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 | 24 | Python SDK (`uniclaw-client`) | Phase 3.5 | [steps/24-python-client.md](steps/24-python-client.md) |
 | 25 | Bearer-token Authentication on `/v1` | Phase 3.5 | [steps/25-bearer-token-auth.md](steps/25-bearer-token-auth.md) |
 | 19a | `key_id` field on receipts | Phase 3.5 | [steps/19a-key-id-field.md](steps/19a-key-id-field.md) |
+| 26 | Persistence in proposal mode | Phase 3.5 | [steps/26-proposal-mode-persistence.md](steps/26-proposal-mode-persistence.md) |
 
 > **Note:** Phase 0 (the receipt format) is foundational and ships before Phase 1 step 1, so it's labeled "Step 0" in this index. Phase 1 has 8 numbered steps. Phase 2 has 4 numbered steps (9-12). Phase 3 begins at step 13.
 
