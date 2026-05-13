@@ -1166,3 +1166,329 @@ async fn ed25519_signer_with_key_id_builder_works() {
     let signer = signer.without_key_id();
     assert_eq!(signer.key_id(), None);
 }
+
+// ---------------------------------------------------------------------
+// Step 26 — Persistence in proposal mode (SqliteReceiptLog backend)
+// ---------------------------------------------------------------------
+
+use uniclaw_store_sqlite::SqliteReceiptLog;
+
+/// Path under `std::env::temp_dir()` unique per test. Caller is
+/// responsible for cleanup on success; on test failure the leftover
+/// file is harmless (test runs are deterministic).
+fn temp_db_path(suffix: &str) -> std::path::PathBuf {
+    let pid = std::process::id();
+    let counter = std::sync::atomic::AtomicU64::new(0);
+    let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("uniclaw-host-step26-{pid}-{n}-{suffix}.db"))
+}
+
+fn build_app_with_sqlite(log: SqliteReceiptLog) -> Router {
+    let signer = Ed25519Signer::from_seed(&TEST_SEED);
+    let constitution = parse_toml(TEST_CONSTITUTION).expect("parse test constitution");
+    // Step 26: resume the kernel from the log's current head so the
+    // next minted receipt links continuously to the persisted chain.
+    let kernel = uniclaw_host::api::build_kernel_from_log(&log, signer, constitution);
+    let log = Arc::new(RwLock::new(log));
+    let state = ApiState::new(kernel, log.clone());
+    router(log).merge(api_router(state, AuthConfig::insecure()))
+}
+
+fn test_issuer() -> uniclaw_receipt::PublicKey {
+    Ed25519Signer::from_seed(&TEST_SEED).public_key()
+}
+
+#[tokio::test]
+async fn sqlite_backed_proposal_mints_and_persists_across_drop() {
+    let db_path = temp_db_path("persist");
+    // Clean any stale leftover from a previous failed run.
+    let _ = std::fs::remove_file(&db_path);
+
+    // First boot: open a fresh DB, mint an Allowed receipt.
+    let content_id_hex;
+    {
+        let log = SqliteReceiptLog::open(&db_path, test_issuer()).expect("open fresh sqlite");
+        let app = build_app_with_sqlite(log);
+        let req = json_request(
+            "/v1/proposals",
+            &json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": "https://example.com/persist",
+                    "input_hash": "00".repeat(32),
+                }
+            }),
+        );
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let r: ReceiptResponse = body_as(resp).await;
+        assert_eq!(r.decision, "allowed");
+        content_id_hex = r.content_id;
+        // Confirm it's fetchable on this app instance too.
+        let fetch = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/receipts/{content_id_hex}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fetch.status(), StatusCode::OK);
+        // `app` and `log` drop here — SQLite connection closes.
+    }
+
+    // Second boot: re-open the SAME DB. The minted receipt MUST still
+    // be fetchable; this is the restart-survival property step 26
+    // ships.
+    {
+        let log = SqliteReceiptLog::open(&db_path, test_issuer()).expect("reopen sqlite");
+        let app = build_app_with_sqlite(log);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/receipts/{content_id_hex}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "receipt minted in first boot must survive into the second boot",
+        );
+        // And verify the chain integrity end-to-end.
+        let receipt: Receipt = body_as(resp).await;
+        crypto::verify(&receipt).expect("persisted receipt verifies");
+    }
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[tokio::test]
+async fn sqlite_backed_proposal_chain_continues_across_reopen() {
+    // Mint 2 receipts in one process, 1 more after reopen. The
+    // chain prev_hash must link continuously (sequence 0 → 1 → 2).
+    let db_path = temp_db_path("chain");
+    let _ = std::fs::remove_file(&db_path);
+
+    let last_leaf_after_first_boot;
+    {
+        let log = SqliteReceiptLog::open(&db_path, test_issuer()).expect("open fresh");
+        let app = build_app_with_sqlite(log);
+        // Two proposals.
+        for i in 0..2u64 {
+            let req = json_request(
+                "/v1/proposals",
+                &json!({
+                    "action": {
+                        "kind": "http.fetch",
+                        "target": format!("https://example.com/chain/{i}"),
+                        "input_hash": format!("{i:02x}").repeat(32),
+                    }
+                }),
+            );
+            let resp = app.clone().oneshot(req).await.unwrap();
+            let r: ReceiptResponse = body_as(resp).await;
+            assert_eq!(r.sequence, i, "first boot sequence {i}");
+        }
+        // Capture the last leaf_hash to assert linkage after reopen.
+        // We fetch sequence 1's receipt via /receipts/<hash>.
+        let req = json_request(
+            "/v1/proposals",
+            &json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": "https://example.com/chain/peek",
+                    "input_hash": "ff".repeat(32),
+                }
+            }),
+        );
+        // Don't mint a 3rd here — instead, observe the current chain
+        // state by checking healthz.
+        let _ = req; // keep variable referenced in case future refactor; explicit drop below
+        // To capture leaf hash we'd need an in-band response field;
+        // easier to use the kernel state. We'll fetch the second
+        // receipt directly and read its leaf_hash from the body.
+        let r2 = json_request(
+            "/v1/proposals",
+            &json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": "https://example.com/chain/observe",
+                    "input_hash": "22".repeat(32),
+                }
+            }),
+        );
+        let resp = app.clone().oneshot(r2).await.unwrap();
+        let r: ReceiptResponse = body_as(resp).await;
+        assert_eq!(r.sequence, 2);
+        let fetch = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/receipts/{}", r.content_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt: Receipt = body_as(fetch).await;
+        last_leaf_after_first_boot = receipt.body.merkle_leaf.leaf_hash;
+    }
+
+    // Reopen and mint one more — its prev_hash must equal the leaf
+    // we captured. Sequence must continue at 3.
+    {
+        let log = SqliteReceiptLog::open(&db_path, test_issuer()).expect("reopen");
+        let app = build_app_with_sqlite(log);
+        let req = json_request(
+            "/v1/proposals",
+            &json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": "https://example.com/chain/after-restart",
+                    "input_hash": "33".repeat(32),
+                }
+            }),
+        );
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let r: ReceiptResponse = body_as(resp).await;
+        assert_eq!(
+            r.sequence, 3,
+            "chain must continue at sequence 3 after restart, got {}",
+            r.sequence,
+        );
+        let fetch = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/receipts/{}", r.content_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt: Receipt = body_as(fetch).await;
+        assert_eq!(
+            receipt.body.merkle_leaf.prev_hash, last_leaf_after_first_boot,
+            "chain link broken across restart",
+        );
+    }
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[tokio::test]
+async fn sqlite_backed_proposal_with_tool_execution_persists() {
+    // Step 23's tool-execution endpoint also rides on the persistent
+    // log — confirm a full propose → record chain survives reopen.
+    let db_path = temp_db_path("tool-exec");
+    let _ = std::fs::remove_file(&db_path);
+
+    let exec_content_id;
+    {
+        let log = SqliteReceiptLog::open(&db_path, test_issuer()).expect("open fresh");
+        let app = build_app_with_sqlite(log);
+        // Mint an Allowed tool.* receipt.
+        let propose = json_request(
+            "/v1/proposals",
+            &json!({
+                "action": {
+                    "kind": "tool.http_fetch",
+                    "target": "https://api.example.com/persist-tool",
+                    "input_hash": "aa".repeat(32),
+                }
+            }),
+        );
+        let allowed: ReceiptResponse = body_as(app.clone().oneshot(propose).await.unwrap()).await;
+        assert_eq!(allowed.decision, "allowed");
+        // Record an execution against it.
+        let exec_req = json_request(
+            "/v1/tool-executions",
+            &json!({
+                "allowed_receipt_id": allowed.content_id,
+                "output_hash": "bb".repeat(32),
+                "secrets_used": ["github.token"],
+            }),
+        );
+        let exec: ReceiptResponse = body_as(app.oneshot(exec_req).await.unwrap()).await;
+        assert_eq!(exec.decision, "allowed");
+        exec_content_id = exec.content_id;
+    }
+
+    // Reopen — execution receipt must still be fetchable + verifiable.
+    {
+        let log = SqliteReceiptLog::open(&db_path, test_issuer()).expect("reopen");
+        let app = build_app_with_sqlite(log);
+        let fetch = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/receipts/{exec_content_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fetch.status(), StatusCode::OK);
+        let receipt: Receipt = body_as(fetch).await;
+        crypto::verify(&receipt).expect("persisted tool-execution receipt verifies");
+        assert_eq!(receipt.body.action.kind, "$kernel/tool/executed");
+        // Verify the secret_used provenance edge survived.
+        let secret_edges: Vec<_> = receipt
+            .body
+            .provenance
+            .iter()
+            .filter(|e| e.kind == "secret_used")
+            .collect();
+        assert_eq!(secret_edges.len(), 1, "secret_used edge must persist");
+        assert_eq!(secret_edges[0].to, "secret:github.token");
+    }
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[tokio::test]
+async fn sqlite_reopen_with_wrong_issuer_is_caught_by_peek_issuer() {
+    // The DB pins one issuer; re-opening with a different pubkey
+    // is rejected by `SqliteReceiptLog::open` itself. The binary's
+    // run_proposal_mode does an explicit `peek_issuer` first so it
+    // can emit a CLEARER error than the log's `OpenError`. This
+    // test confirms both the peek path and the open-time rejection.
+    let db_path = temp_db_path("issuer-mismatch");
+    let _ = std::fs::remove_file(&db_path);
+
+    let original_issuer = test_issuer();
+    {
+        let log = SqliteReceiptLog::open(&db_path, original_issuer).expect("open fresh");
+        let app = build_app_with_sqlite(log);
+        let req = json_request(
+            "/v1/proposals",
+            &json!({
+                "action": {
+                    "kind": "http.fetch",
+                    "target": "https://example.com/seed",
+                    "input_hash": "00".repeat(32),
+                }
+            }),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        let r: ReceiptResponse = body_as(resp).await;
+        assert_eq!(r.decision, "allowed");
+    }
+
+    // peek_issuer reveals the pinned identity without opening.
+    let pinned = SqliteReceiptLog::peek_issuer(&db_path)
+        .expect("peek")
+        .expect("issuer pinned after first boot");
+    assert_eq!(pinned, original_issuer);
+
+    // Re-opening with the WRONG pubkey must fail at the log layer.
+    // (The binary's startup check via peek_issuer would normally
+    // fire first with a clearer message; here we exercise the
+    // belt-and-suspenders rejection inside `open`.)
+    let wrong_issuer = uniclaw_receipt::PublicKey([0u8; 32]);
+    let err = SqliteReceiptLog::open(&db_path, wrong_issuer);
+    assert!(err.is_err(), "open with wrong issuer must fail; got Ok");
+
+    let _ = std::fs::remove_file(&db_path);
+}

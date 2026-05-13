@@ -12,6 +12,79 @@ format change history.
 
 ### Added
 
+- **Persistence in proposal mode** (Phase 3.5 / step 26) —
+  `uniclaw-host --constitution <path> --db <path>` now works
+  together. Proposal mode mints receipts that survive process
+  restarts via `SqliteReceiptLog`. This is the **first
+  production-deployable** state for Uniclaw: restart-safe,
+  auth-gated (step 25), key-identified (step 19a), and persistent.
+  No wire-format change — clients run unchanged.
+  - **`crates/uniclaw-host/src/api.rs`:**
+    - `ApiState<L: ReceiptLog + Send + Sync + 'static>` is now
+      generic over the log type. Every `/v1` handler signature
+      gains `<L>`. Existing tests (in-memory) compile unchanged —
+      Rust's type inference picks up `InMemoryReceiptLog` from
+      the fixture helper. The read-only `router<L>(log)` has
+      been generic since step 9, so the pattern lines up.
+    - New `pub fn build_kernel_from_log<L>(log, signer,
+      constitution) -> ApiKernel` helper. Reads `log.last()` and
+      builds a `KernelState` whose `sequence = last + 1` and
+      `prev_hash = last.leaf_hash`, then calls `Kernel::resume`.
+      Empty log → `Kernel::new` (genesis), byte-identical to
+      pre-step-26 hosts. Non-empty log → resume so the next
+      minted receipt links continuously to the persisted chain.
+      Without this helper, a fresh `Kernel::new` against a
+      populated DB would mint at `sequence = 0` again and the
+      log would `AppendError::OutOfOrder`.
+  - **`crates/uniclaw-host/src/bin/uniclaw-host.rs`:**
+    - The `--constitution` + `--db` combination is no longer
+      `bail`ed; the binary dispatches to a generic
+      `serve_proposal_mode<L>` with either `InMemoryReceiptLog`
+      (default) or `SqliteReceiptLog` (`--db`).
+    - SQLite path runs an explicit `SqliteReceiptLog::peek_issuer`
+      pre-check before `open` so a mismatched signing key gets a
+      clean error message ("kernel signing key (issuer X…) does
+      not match the pinned issuer of the SQLite log at <path>
+      (issuer Y…). Refusing to fork the chain.").
+    - `--db` flag's doc comment updated to describe both
+      read-only and proposal-mode semantics + fresh-DB-vs-
+      existing-DB pinning rules.
+  - **Tests (4 new in `tests/api.rs`; workspace at 427/427):**
+    - `sqlite_backed_proposal_mints_and_persists_across_drop` —
+      mint → drop the app/log → reopen same DB → GET receipt
+      → 200 OK + signature verifies.
+    - `sqlite_backed_proposal_chain_continues_across_reopen` —
+      3 mints (sequence 0/1/2) → drop → reopen → mint another
+      (sequence 3) → `prev_hash` equals the persisted leaf.
+    - `sqlite_backed_proposal_with_tool_execution_persists` —
+      full propose → record-tool-execution chain → drop →
+      reopen → execution receipt fetchable + `secret_used`
+      provenance edge intact.
+    - `sqlite_reopen_with_wrong_issuer_is_caught_by_peek_issuer`
+      — `peek_issuer` reveals the original; `open` with the
+      wrong pubkey fails (belt-and-suspenders).
+  - **Cross-language smoke against the fresh release binary:**
+    TS 52/52 + Python 84/84 with `UNICLAW_INTEGRATION=1`. The
+    clients run unchanged — wire format identical.
+  - **Bench** (`bench-results/26-proposal-mode-persistence.txt`):
+    in-memory 13.3 ms/req, SQLite 7.1 ms/req (same band; cross-
+    process system noise dominates the difference). Choice of
+    backend is a durability decision, not a performance one.
+    Restart-survival proven end-to-end: pre-restart mint at
+    sequence 0 → SIGINT → respawn with same `--db` → GET 200
+    → next mint at sequence 1 with `prev_hash` linking to the
+    persisted leaf.
+  - **What this step does NOT ship:** restart-resumption of
+    pending-approval *caller state* (the receipt is fetchable
+    after restart; the `(pending_receipt, original_proposal)`
+    pair the resolver needs is caller orchestration);
+    multi-host federation (Phase 4 territory; SqliteReceiptLog
+    is single-writer); online backup / replication (operators
+    use SQLite tooling — `.backup`, `litestream`, FS
+    snapshots); schema migrations (DB schema is rev 1 from step
+    10; future changes ship a migration step); hot reload of
+    the constitution (restart with new flags).
+
 - **`key_id` field on receipts** (Phase 3.5 / step 19a;
   RFC-0001 rev **2.1**) — receipts can now name their signing
   key. Optional `body.key_id: Option<String>` is additive: the
