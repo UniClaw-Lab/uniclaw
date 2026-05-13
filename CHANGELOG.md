@@ -12,6 +12,79 @@ format change history.
 
 ### Added
 
+- **Publish-ready packaging for the three client libraries** (Phase
+  3.5 / step 27) — the operations bridge that makes threshold 1
+  *literal*. Until this PR, `@uniclaw/verifier`, `@uniclaw/client`,
+  and `uniclaw-client` (Python) lived only in this repo; this PR
+  fixes the metadata blockers so the operator can push them to npm
+  and PyPI. **Zero runtime code changes** — all three library
+  source trees are bit-for-bit identical to step 26.
+  - **Root `package.json` (new):** declares an npm workspaces root
+    spanning `packages/verifier-ts` and `packages/client-ts`. Local
+    dev resolves `@uniclaw/verifier` from the source tree via
+    symlink; publish writes the registry version. Each workspace
+    package keeps its own scripts; root `npm install` populates a
+    single hoisted `node_modules` (per-package `node_modules` and
+    `package-lock.json` files removed).
+  - **`packages/client-ts/package.json`:**
+    `"@uniclaw/verifier"` dependency changed from
+    `"file:../verifier-ts"` to `"^0.1.0"`. Was the literal blocker
+    for `npm publish` — file: deps don't translate across the
+    registry. Workspaces makes the local-dev case work identically.
+  - **Both TS `package.json` files:**
+    - `"publishConfig": { "access": "public" }` — scoped packages
+      default to private; this makes them public-on-publish so
+      `--access public` isn't needed on the publish command.
+    - `"prepublishOnly": "npm run build && npm test"` — guards
+      against shipping a stale `dist/` or a regressed test suite.
+    - `LICENSE-MIT` + `LICENSE-APACHE` added to the `files` array.
+  - **LICENSE files copied into all three packages** (real files,
+    not symlinks — npm pack does not flatten symlinks, verified via
+    `npm pack --dry-run`). Setuptools 68+ auto-discovers them in
+    the Python package; they land in `dist-info/licenses/` in the
+    wheel and at the sdist root.
+  - **`docs/steps/27-publish-clients.md`** — full operator runbook
+    for npm publish + PyPI publish, including pre-flight checklist
+    (`@uniclaw` org, 2FA, API tokens), publish order (verifier
+    before client — client depends on it on the registry), post-
+    publish verification, and the version-bump policy for future
+    releases.
+  - **Side-fix: `packages/client-ts/tests/bench.mjs`** — the TS
+    bench had been broken since step 25 (PR #33) because it spawned
+    the host without `--bearer-token-hex` or `--insecure-no-auth`,
+    so the safe-default auth check (added in step 25) made the host
+    exit at startup with the "refusing to expose /v1 unauthenticated"
+    error. The Python bench was updated at the time but the TS bench
+    wasn't. Fixed with `--bearer-token-hex` on the spawn args,
+    `bearerToken` on both `UniclawClient` instances, and
+    `Authorization: Bearer` on the raw-fetch baseline.
+  - **Verification (all green; same 605-test total as pre-PR
+    baseline):**
+    - Rust 427 (`cargo test --workspace`).
+    - TS verifier 42 (`npm test --workspace @uniclaw/verifier`).
+    - TS client 52 with integration (`UNICLAW_INTEGRATION=1 npm test
+      --workspace @uniclaw/client`).
+    - Python 84 with integration (`UNICLAW_INTEGRATION=1 pytest` in
+      `packages/client-py`).
+    - `npm pack --dry-run` on both TS packages: tarballs contain
+      LICENSE-MIT, LICENSE-APACHE, README, `dist/`, no leaked
+      dev files.
+    - `python -m build && twine check dist/*` on the Python package:
+      both sdist + wheel build clean, both pass twine validation.
+  - **Bench** (`bench-results/27-publish-clients.txt`): zero runtime
+    code changes, so this is a smoke test confirming the live binary
+    paths still work end-to-end. TS bench resurrected after the
+    side-fix. Numbers are in the expected band (`verify=true ≈
+    25-40 ms/req`, `verify=false ≈ 10-15 ms/req`, dominated by
+    test-machine load variance — the test-count proof is what
+    establishes "no regression").
+  - **What this step does NOT ship:** the actual `npm publish` /
+    `twine upload` (operator credentials only; runbook is in the
+    step doc); CI automation for publish-on-tag (manual first,
+    automate later if frequency warrants); version bumps (all three
+    stay at 0.1.0; this is the first publish); per-package
+    changelogs (repo-level `CHANGELOG.md` is still authoritative).
+
 - **Persistence in proposal mode** (Phase 3.5 / step 26) —
   `uniclaw-host --constitution <path> --db <path>` now works
   together. Proposal mode mints receipts that survive process

@@ -13,16 +13,22 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
-    "@uniclaw/verifier": "file:../verifier-ts"
+    "@uniclaw/verifier": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

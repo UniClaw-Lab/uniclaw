@@ -24,6 +24,7 @@ const REPO_ROOT = resolve(here, "../../..");
 const HOST_BIN = resolve(REPO_ROOT, "target/release/uniclaw-host");
 const FIXTURE = resolve(here, "fixtures/test-constitution.toml");
 const SEED_HEX = "2a".repeat(32);
+const BENCH_TOKEN_HEX = "ab".repeat(32);
 
 if (!existsSync(HOST_BIN)) {
   console.error(`missing ${HOST_BIN} — run cargo build --release first`);
@@ -32,7 +33,12 @@ if (!existsSync(HOST_BIN)) {
 
 const proc = spawn(
   HOST_BIN,
-  ["--constitution", FIXTURE, "--signer-seed-hex", SEED_HEX, "--bind", "127.0.0.1:0"],
+  [
+    "--constitution", FIXTURE,
+    "--signer-seed-hex", SEED_HEX,
+    "--bearer-token-hex", BENCH_TOKEN_HEX,
+    "--bind", "127.0.0.1:0",
+  ],
   { stdio: ["ignore", "pipe", "pipe"] },
 );
 
@@ -74,7 +80,7 @@ function fmt(r) {
 const N = 200;
 
 // (a) verify=true (default)
-const clientVerify = new UniclawClient({ baseUrl });
+const clientVerify = new UniclawClient({ baseUrl, bearerToken: BENCH_TOKEN_HEX });
 const r1 = await timeRun(
   "client.evaluate verify=true",
   () => clientVerify.evaluate(ACTION),
@@ -82,20 +88,29 @@ const r1 = await timeRun(
 );
 
 // (b) verify=false
-const clientNoVerify = new UniclawClient({ baseUrl, verifyByDefault: false });
+const clientNoVerify = new UniclawClient({
+  baseUrl,
+  verifyByDefault: false,
+  bearerToken: BENCH_TOKEN_HEX,
+});
 const r2 = await timeRun(
   "client.evaluate verify=false",
   () => clientNoVerify.evaluate(ACTION),
   N,
 );
 
-// (c) raw fetch baseline (keepalive)
+// (c) raw fetch baseline (keepalive). Auth header included so
+// this is apples-to-apples with the client paths (which also
+// send it on every /v1 POST since step 25).
 const r3 = await timeRun(
   "raw fetch POST /v1/proposals",
   async () => {
     const r = await fetch(`${baseUrl}/v1/proposals`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${BENCH_TOKEN_HEX}`,
+      },
       body: JSON.stringify({
         action: {
           kind: ACTION.kind,
