@@ -1,6 +1,6 @@
 # `@uniclaw/client`
 
-TypeScript client for [Uniclaw](https://github.com/UniClaw-Lab/uniclaw)'s HTTP proposal API. The on-ramp for any non-Rust runtime that wants to anchor agent actions into Uniclaw receipts.
+TypeScript client for [Uniclaw](https://github.com/BoardClaw-Labs/uniclaw)'s HTTP proposal API. The on-ramp for any non-Rust runtime that wants to anchor agent actions into Uniclaw receipts.
 
 One class, three operations, verify-by-default. Browser + Node 20+.
 

@@ -1,6 +1,6 @@
 # `uniclaw-client` (Python)
 
-Python client + verifier for [Uniclaw](https://github.com/UniClaw-Lab/uniclaw) receipts. The on-ramp for any Python-based runtime — NemoClaw bridges, compliance tooling, custom agents — that wants to anchor agent actions into Uniclaw receipts.
+Python client + verifier for [Uniclaw](https://github.com/BoardClaw-Labs/uniclaw) receipts. The on-ramp for any Python-based runtime — NemoClaw bridges, compliance tooling, custom agents — that wants to anchor agent actions into Uniclaw receipts.
 
 One class, four operations, verify-by-default. Python 3.10+.
 

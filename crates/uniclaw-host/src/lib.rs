@@ -172,7 +172,7 @@ async fn get_index() -> impl IntoResponse {
         "<li><code>GET /verify</code> — paste a receipt, verify it client-side.</li>",
         "<li><code>GET /healthz</code> — JSON liveness probe.</li>",
         "</ul>",
-        "<p>See <a href=\"https://github.com/UniClaw-Lab/uniclaw\">the project on GitHub</a> ",
+        "<p>See <a href=\"https://github.com/BoardClaw-Labs/uniclaw\">the project on GitHub</a> ",
         "for the receipt format spec and the offline command-line verifier.</p>",
         "</body></html>",
     );

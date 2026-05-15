@@ -10,6 +10,19 @@ format change history.
 
 ## [Unreleased]
 
+### Changed
+
+- **Repo URL updated to `BoardClaw-Labs/uniclaw`** (GitHub org rename
+  from `UniClaw-Lab` on 2026-05-13). 12 references touched across
+  `README.md`, `docs/01-what-is-uniclaw.md`,
+  `crates/uniclaw-host/src/lib.rs` (the `/verify` HTML page),
+  `packages/{verifier-ts,client-ts}/package.json` (`repository.url`
+  + `homepage`), `packages/{verifier-ts,client-ts,client-py}/README.md`,
+  and `packages/client-py/pyproject.toml` (`Homepage` / `Repository`
+  / `Source`). Important because the URLs end up in the **published**
+  package metadata on npm + PyPI — needs to be correct *before* the
+  first registry push. No code change; all 605 tests still pass.
+
 ### Added
 
 - **Publish-ready packaging for the three client libraries** (Phase

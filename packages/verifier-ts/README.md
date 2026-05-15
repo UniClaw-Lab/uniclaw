@@ -1,6 +1,6 @@
 # `@uniclaw/verifier`
 
-Standalone TypeScript verifier for [Uniclaw](https://github.com/UniClaw-Lab/uniclaw) receipts.
+Standalone TypeScript verifier for [Uniclaw](https://github.com/BoardClaw-Labs/uniclaw) receipts.
 
 Recomputes the canonical body bytes (RFC 8785 JCS), the BLAKE3 `content_id`, and verifies the Ed25519 signature against the receipt's embedded issuer key. Browser + Node 20+. No native deps.
 
@@ -83,7 +83,7 @@ If you want to pin trust to a specific issuer key, compare `result.issuerHex` ag
 
 ## Receipt format
 
-This package targets [RFC-0001 Schema v2](https://github.com/UniClaw-Lab/uniclaw/blob/main/RFCS/0001-receipt-format.md). It also accepts v1 (legacy) receipts via the same fallback path the browser verifier uses (`JSON.stringify(body)` over the parsed body).
+This package targets [RFC-0001 Schema v2](https://github.com/BoardClaw-Labs/uniclaw/blob/main/RFCS/0001-receipt-format.md). It also accepts v1 (legacy) receipts via the same fallback path the browser verifier uses (`JSON.stringify(body)` over the parsed body).
 
 ## Building
 

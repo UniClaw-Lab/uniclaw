@@ -97,7 +97,7 @@ This is the short list of "skills" that make Uniclaw different from other agent 
 
 Uniclaw is **early**. Today you:
 
-- Clone the repo from `https://github.com/UniClaw-Lab/uniclaw`.
+- Clone the repo from `https://github.com/BoardClaw-Labs/uniclaw`.
 - Run `cargo build --workspace`.
 - Use the libraries (`uniclaw-kernel`, `uniclaw-store`, `uniclaw-constitution`, …) from a Rust program.
 - Use the standalone binaries `uniclaw-verify` and `uniclaw-explain` from the command line.

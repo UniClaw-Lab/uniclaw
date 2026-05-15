@@ -91,7 +91,7 @@ No production deployments yet. Run it, break it, file issues.
 ## Quick start
 
 ```bash
-git clone https://github.com/UniClaw-Lab/uniclaw
+git clone https://github.com/BoardClaw-Labs/uniclaw
 cd uniclaw
 
 cargo build --workspace

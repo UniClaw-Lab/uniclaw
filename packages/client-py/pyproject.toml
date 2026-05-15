@@ -47,9 +47,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/UniClaw-Lab/uniclaw"
-Repository = "https://github.com/UniClaw-Lab/uniclaw"
-Source = "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/client-py"
+Homepage = "https://github.com/BoardClaw-Labs/uniclaw"
+Repository = "https://github.com/BoardClaw-Labs/uniclaw"
+Source = "https://github.com/BoardClaw-Labs/uniclaw/tree/main/packages/client-py"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

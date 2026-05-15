@@ -55,9 +55,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/UniClaw-Lab/uniclaw.git",
+    "url": "git+https://github.com/BoardClaw-Labs/uniclaw.git",
     "directory": "packages/verifier-ts"
   },
   "license": "(MIT OR Apache-2.0)",
-  "homepage": "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/verifier-ts"
+  "homepage": "https://github.com/BoardClaw-Labs/uniclaw/tree/main/packages/verifier-ts"
 }
