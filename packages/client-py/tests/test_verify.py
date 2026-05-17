@@ -17,8 +17,8 @@ from typing import Any
 
 from nacl.signing import SigningKey
 
-from uniclaw_client._hex import bytes_to_hex, hex_to_bytes
-from uniclaw_client.verify import canonicalize, compute_content_id_hex, verify_receipt, verify_receipt_json
+from boardproof_client._hex import bytes_to_hex, hex_to_bytes
+from boardproof_client.verify import canonicalize, compute_content_id_hex, verify_receipt, verify_receipt_json
 
 
 # Same deterministic seed the demo binary uses (`[42u8; 32]`).

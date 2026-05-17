@@ -2,7 +2,7 @@
 
 > **Phase:** 3.5 — Receipt-format hardening + adoption-foundations
 > **PR:** _this PR_
-> **Crates / packages touched:** `uniclaw-host` (api + bin) + `packages/client-ts` + `packages/client-py`
+> **Crates / packages touched:** `boardproof-host` (api + bin) + `packages/client-ts` + `packages/client-py`
 > **New artefacts:** `AuthConfig` + axum middleware on the server; `bearerToken` / `bearer_token` options on both clients; `--bearer-token-hex` + `--insecure-no-auth` CLI flags; safe-default startup behavior.
 
 ## What is this step?
@@ -12,7 +12,7 @@ Steps 21–24 shipped the HTTP API and adapters. Every one of them logged
 production-ready" signal in the binary. This step closes that gap:
 
 ```
-$ uniclaw-host --constitution ... --signer-seed-hex ...
+$ boardproof-host --constitution ... --signer-seed-hex ...
 Error: proposal mode (--constitution) requires either
        --bearer-token-hex <64-hex> (recommended) or
        --insecure-no-auth (loopback / fully-trusted network only).
@@ -25,7 +25,7 @@ Read-only routes (`/receipts/<hash>`, `/verify`, `/healthz`, `/`) stay
 public — the cold-verify trust property requires public access to
 receipts.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 ```
                 ┌──────────────────────────┐
@@ -51,7 +51,7 @@ receipts.
                 └──────────────────────────┘
 ```
 
-The split (write requires auth, read does not) is intentional: a Uniclaw
+The split (write requires auth, read does not) is intentional: a BoardProof
 deployment can publish receipt URLs to auditors / regulators / users
 without giving them write capability. The wedge depends on that asymmetry.
 
@@ -63,7 +63,7 @@ Before step 25: not safely. There was no auth layer; anyone reaching the
 port could mint receipts under the operator's signing key. The standing
 mitigation was "bind to loopback or use a reverse proxy with mTLS / a
 bearer-token plugin." That works but adds operator overhead and a moving
-part (the reverse proxy) outside Uniclaw's audit surface.
+part (the reverse proxy) outside BoardProof's audit surface.
 
 After step 25:
 
@@ -72,7 +72,7 @@ After step 25:
 TOKEN=$(head -c 32 /dev/urandom | xxd -p -c 64)
 
 # start the host
-uniclaw-host \
+boardproof-host \
     --constitution constitutions/solo-dev.toml \
     --signer-seed-hex $SEED \
     --bearer-token-hex $TOKEN \
@@ -89,8 +89,8 @@ curl -X POST http://host:8787/v1/proposals \
 
 By scoping the middleware to `/v1` only. Read-only routes are mounted
 by `crate::router(log)` — a separate axum `Router` that doesn't go
-through `api_router`'s layer chain. The clients (`@uniclaw/client`,
-`uniclaw-client`) mirror this:
+through `api_router`'s layer chain. The clients (`@boardproof/client`,
+`boardproof-client`) mirror this:
 
 | Method | Sends `Authorization`? | Reason |
 |---|---|---|
@@ -136,7 +136,7 @@ typing* `--insecure-no-auth`.
 
 ## How does it work in plain words?
 
-**Server (`crates/uniclaw-host/src/api.rs`):**
+**Server (`crates/boardproof-host/src/api.rs`):**
 - New `AuthConfig` type with two constructors: `with_token(Vec<u8>)`
   (enforces 32 bytes) and `insecure()`.
 - `api_router(state, auth)` installs an axum `middleware::from_fn` layer
@@ -147,7 +147,7 @@ typing* `--insecure-no-auth`.
   token as 64 hex chars, compares constant-time, and returns 401 with
   `{error: "unauthorized", detail: "..."}` on any failure.
 
-**Binary (`bin/uniclaw-host.rs`):**
+**Binary (`bin/boardproof-host.rs`):**
 - `--bearer-token-hex <64-hex>` accepts a 32-byte token.
 - `--insecure-no-auth` opts out of auth (mutually exclusive with the
   token flag).
@@ -156,19 +156,19 @@ typing* `--insecure-no-auth`.
 
 **TypeScript client (`packages/client-ts/src/client.ts`):**
 ```ts
-new UniclawClient({
+new BoardProofClient({
   baseUrl: "http://...",
-  bearerToken: process.env.UNICLAW_TOKEN,  // optional
+  bearerToken: process.env.BOARDPROOF_TOKEN,  // optional
 });
 ```
 The token is attached to every `/v1` POST via the `#v1PostHeaders()`
 helper and omitted from `getReceipt` / `verifyReceiptUrl`.
 
-**Python client (`packages/client-py/src/uniclaw_client/client.py`):**
+**Python client (`packages/client-py/src/boardproof_client/client.py`):**
 ```python
-UniclawClient(
+BoardProofClient(
     base_url="http://...",
-    bearer_token=os.environ["UNICLAW_TOKEN"],
+    bearer_token=os.environ["BOARDPROOF_TOKEN"],
 )
 ```
 Same shape, same scoping rule.
@@ -185,7 +185,7 @@ TOKEN=$(head -c 32 /dev/urandom | xxd -p -c 64)
 Run the host with auth required (recommended):
 
 ```bash
-uniclaw-host \
+boardproof-host \
     --constitution path/to/constitution.toml \
     --signer-seed-hex $SIGNER_SEED \
     --bearer-token-hex $TOKEN \
@@ -195,7 +195,7 @@ uniclaw-host \
 Or explicitly opt out for loopback-only deployments:
 
 ```bash
-uniclaw-host \
+boardproof-host \
     --constitution ... \
     --signer-seed-hex ... \
     --insecure-no-auth \
@@ -205,10 +205,10 @@ uniclaw-host \
 The clients pick up the token directly:
 
 ```ts
-const client = new UniclawClient({ baseUrl, bearerToken: process.env.TOKEN });
+const client = new BoardProofClient({ baseUrl, bearerToken: process.env.TOKEN });
 ```
 ```python
-client = UniclawClient(base_url=..., bearer_token=os.environ["TOKEN"])
+client = BoardProofClient(base_url=..., bearer_token=os.environ["TOKEN"])
 ```
 
 ## Verified during this PR
@@ -224,7 +224,7 @@ client = UniclawClient(base_url=..., bearer_token=os.environ["TOKEN"])
   - **TS unit (7 new) + integration (5 new):** `Authorization` header
     on every `/v1` POST, NOT on `getReceipt` / `verifyReceiptUrl`,
     no header when token unset, 401 from server surfaces as
-    `UniclawError(status=401, code="unauthorized")`. Live-binary
+    `BoardProofError(status=401, code="unauthorized")`. Live-binary
     integration test (`integration_auth.test.ts`) spawns the host with
     `--bearer-token-hex` and exercises wrong-token / correct-token /
     public-read paths + a full propose + record_tool_execution chain.
@@ -266,7 +266,7 @@ client = UniclawClient(base_url=..., bearer_token=os.environ["TOKEN"])
   land later if there's demand.
 - **mTLS / OAuth2 / OIDC.** Operators wanting those can put a reverse
   proxy in front of `:8787` and configure it to strip the
-  `Authorization: Bearer` header after its own check. Uniclaw stays
+  `Authorization: Bearer` header after its own check. BoardProof stays
   simple.
 - **HTTPS termination.** Out of scope; the reverse proxy handles it.
 - **Rate limiting / abuse mitigation.** Reverse-proxy concern.

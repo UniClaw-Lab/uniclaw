@@ -1,6 +1,6 @@
-# Contributing to Uniclaw
+# Contributing to BoardProof
 
-Thanks for considering a contribution. Uniclaw is in pre-alpha and the bar for
+Thanks for considering a contribution. BoardProof is in pre-alpha and the bar for
 correctness is unusually high — we are building a verifiable agent runtime,
 which means every shipped change is an attestation about agent behavior.
 
@@ -13,10 +13,10 @@ which means every shipped change is an attestation about agent behavior.
 
 ## The Adopt-Don't-Copy rule
 
-Uniclaw reads every source claw's code; never imports it. This is hard rule §24.1.
+BoardProof reads every source claw's code; never imports it. This is hard rule §24.1.
 
 - **Algorithms and math** are fair game — Merkle hashing, capability matching,
-  CRDT merges. Reimplement in Uniclaw idioms.
+  CRDT merges. Reimplement in BoardProof idioms.
 - **Test fixtures and adversarial scenarios** should be embedded with
   attribution.
 - **Specs and formats** are supported, not embedded — write your own parsers
@@ -33,7 +33,7 @@ CI enforces these. PRs that violate them will be auto-blocked:
 
 | Rule                                      | Limit          |
 | ----------------------------------------- | -------------- |
-| File size in `uniclaw-kernel/`            | ≤ 5 KLOC       |
+| File size in `boardproof-kernel/`            | ≤ 5 KLOC       |
 | Workspace crate count (through Phase 4)   | ≤ 20           |
 | Config formats                            | TOML only      |
 | Binary / RSS budgets per profile          | per §23 table  |

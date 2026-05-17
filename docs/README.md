@@ -1,13 +1,13 @@
-# Uniclaw Documentation
+# BoardProof Documentation
 
-Plain-English documentation for Uniclaw — the verifiable AI agent runtime.
+Plain-English documentation for BoardProof — the verifiable AI agent runtime.
 
 ## Start here
 
-If you've never heard of Uniclaw before, read these in order:
+If you've never heard of BoardProof before, read these in order:
 
-1. **[What is Uniclaw?](01-what-is-uniclaw.md)** — A friendly introduction. After 10 minutes you should know what Uniclaw does, who it's for, and why it's different.
-2. **[Uniclaw vs OpenClaw](02-uniclaw-vs-openclaw.md)** — Side-by-side comparison with the most popular agent runtime. Helps you decide which one fits your needs.
+1. **[What is BoardProof?](01-what-is-boardproof.md)** — A friendly introduction. After 10 minutes you should know what BoardProof does, who it's for, and why it's different.
+2. **[BoardProof vs OpenClaw](02-boardproof-vs-openclaw.md)** — Side-by-side comparison with the most popular agent runtime. Helps you decide which one fits your needs.
 3. **[The Roadmap](03-roadmap.md)** — The 8-phase plan and where we are right now.
 
 ## Step-by-step deep dive
@@ -15,7 +15,7 @@ If you've never heard of Uniclaw before, read these in order:
 Each implementation step has its own page in `steps/`. Each one explains, in plain English:
 
 - **What** the step is.
-- **Where** it fits in the whole Uniclaw architecture.
+- **Where** it fits in the whole BoardProof architecture.
 - **What problem** it solved technically.
 - **How it works** in plain words (with code snippets where they help).
 - **What you can do** with it today.
@@ -44,11 +44,11 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 | 18 | Output Sanitization / Redaction Proofs | Phase 3 | [steps/18-output-sanitization.md](steps/18-output-sanitization.md) |
 | 19 | Receipt Canonicalization (RFC 8785 JCS) | Phase 3.5 | [steps/19-receipt-canonicalization.md](steps/19-receipt-canonicalization.md) |
 | 20 | End-to-end Demo | Phase 3.5 | [steps/20-end-to-end-demo.md](steps/20-end-to-end-demo.md) |
-| 20a | TypeScript Verifier (`@uniclaw/verifier`) | Phase 3.5 | [steps/20a-typescript-verifier.md](steps/20a-typescript-verifier.md) |
+| 20a | TypeScript Verifier (`@boardproof/verifier`) | Phase 3.5 | [steps/20a-typescript-verifier.md](steps/20a-typescript-verifier.md) |
 | 21 | HTTP Proposal API | Phase 3.5 | [steps/21-http-proposal-api.md](steps/21-http-proposal-api.md) |
-| 22 | TypeScript SDK (`@uniclaw/client`) | Phase 3.5 | [steps/22-typescript-client.md](steps/22-typescript-client.md) |
+| 22 | TypeScript SDK (`@boardproof/client`) | Phase 3.5 | [steps/22-typescript-client.md](steps/22-typescript-client.md) |
 | 23 | Tool-execution API | Phase 3.5 | [steps/23-tool-execution-api.md](steps/23-tool-execution-api.md) |
-| 24 | Python SDK (`uniclaw-client`) | Phase 3.5 | [steps/24-python-client.md](steps/24-python-client.md) |
+| 24 | Python SDK (`boardproof-client`) | Phase 3.5 | [steps/24-python-client.md](steps/24-python-client.md) |
 | 25 | Bearer-token Authentication on `/v1` | Phase 3.5 | [steps/25-bearer-token-auth.md](steps/25-bearer-token-auth.md) |
 | 19a | `key_id` field on receipts | Phase 3.5 | [steps/19a-key-id-field.md](steps/19a-key-id-field.md) |
 | 26 | Persistence in proposal mode | Phase 3.5 | [steps/26-proposal-mode-persistence.md](steps/26-proposal-mode-persistence.md) |
@@ -58,8 +58,8 @@ Each implementation step has its own page in `steps/`. Each one explains, in pla
 
 ## How to navigate
 
-- **Most readers** should start with [01-what-is-uniclaw.md](01-what-is-uniclaw.md) and stop there. That document is enough to understand what Uniclaw is and decide whether to keep reading.
-- **Engineers evaluating Uniclaw for production** should read [02-uniclaw-vs-openclaw.md](02-uniclaw-vs-openclaw.md) and then dip into the step docs that match their concerns (e.g., compliance officers want step 7 (Receipt Store) and step 5 (Approval Engine) most).
+- **Most readers** should start with [01-what-is-boardproof.md](01-what-is-boardproof.md) and stop there. That document is enough to understand what BoardProof is and decide whether to keep reading.
+- **Engineers evaluating BoardProof for production** should read [02-boardproof-vs-openclaw.md](02-boardproof-vs-openclaw.md) and then dip into the step docs that match their concerns (e.g., compliance officers want step 7 (Receipt Store) and step 5 (Approval Engine) most).
 - **Contributors** should read everything, then check `UNICLAW_PLAN.md` (the canonical master plan) and `CONTRIBUTING.md`.
 
 ## Style and conventions

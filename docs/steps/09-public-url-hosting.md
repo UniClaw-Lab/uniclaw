@@ -2,32 +2,32 @@
 
 > **Phase:** 2 — Public Service
 > **PR:** _this PR_
-> **Crate introduced:** `uniclaw-host`
-> **Crate updated:** `uniclaw-receipt` (added `Digest::to_hex` / `from_hex`)
+> **Crate introduced:** `boardproof-host`
+> **Crate updated:** `boardproof-receipt` (added `Digest::to_hex` / `from_hex`)
 
 ## What is this step?
 
-This step turns `uniclaw://receipt/<hash>` into something an outsider can actually `curl`.
+This step turns `boardproof://receipt/<hash>` into something an outsider can actually `curl`.
 
 Before this step, every receipt was verifiable in theory — anyone with the public key could check the signature on a JSON file. But there was no place to **send people**. You had to email the JSON around. That's not how auditors work.
 
-After this step, you can hand someone a URL — `https://your-host/receipts/<hex>` — and they can fetch the receipt with a browser, then verify it themselves with `uniclaw-verify` or any Ed25519-aware tool. No account. No login. No trust in the operator.
+After this step, you can hand someone a URL — `https://your-host/receipts/<hex>` — and they can fetch the receipt with a browser, then verify it themselves with `boardproof-verify` or any Ed25519-aware tool. No account. No login. No trust in the operator.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 This is the **first step of Phase 2**. Phase 1 built the trusted core that produces and stores receipts. Phase 2 makes those receipts **externally visible**.
 
 ```mermaid
 graph LR
   K[Kernel] -->|signed receipt| L[ReceiptLog]
-  L -->|read| H[uniclaw-host]
+  L -->|read| H[boardproof-host]
   H -->|HTTP| C[Client / auditor]
   C -->|cold-verify with public key| V((✓ verified))
 ```
 
-`uniclaw-host` is purely a **read** consumer of the receipt log. It does not produce receipts and does not modify the chain. It does not even **re-verify** receipts on serving — that's deliberate. See "Why serve-as-stored" below.
+`boardproof-host` is purely a **read** consumer of the receipt log. It does not produce receipts and does not modify the chain. It does not even **re-verify** receipts on serving — that's deliberate. See "Why serve-as-stored" below.
 
-This is also **the first crate in the workspace that depends on `std`**. The Phase 1 core is `no_std + alloc`. The host needs Tokio, axum, and a TCP listener — those require std. Keeping the trusted core no_std-friendly is unchanged: only `uniclaw-host` opts into std.
+This is also **the first crate in the workspace that depends on `std`**. The Phase 1 core is `no_std + alloc`. The host needs Tokio, axum, and a TCP listener — those require std. Keeping the trusted core no_std-friendly is unchanged: only `boardproof-host` opts into std.
 
 ## What problem does it solve technically?
 
@@ -104,13 +104,13 @@ The `tokio::sync::RwLock` is intentional: many readers can fetch in parallel; a 
 
 ## What you can do with this step today
 
-- Use the `uniclaw-host` library:
+- Use the `boardproof-host` library:
 
   ```rust,ignore
   use std::sync::Arc;
   use tokio::sync::RwLock;
-  use uniclaw_host::router;
-  use uniclaw_store::InMemoryReceiptLog;
+  use boardproof_host::router;
+  use boardproof_store::InMemoryReceiptLog;
 
   let log = Arc::new(RwLock::new(InMemoryReceiptLog::new(my_pubkey)));
   let app = router(log);
@@ -122,8 +122,8 @@ The `tokio::sync::RwLock` is intentional: many readers can fetch in parallel; a 
 - Or run the bundled binary, which loads `*.json` receipts from a directory:
 
   ```sh
-  $ uniclaw-host --receipts-dir ./receipts --bind 127.0.0.1:8787
-  uniclaw-host: serving 12 receipt(s) (issuer 9c1aef…) on http://127.0.0.1:8787
+  $ boardproof-host --receipts-dir ./receipts --bind 127.0.0.1:8787
+  boardproof-host: serving 12 receipt(s) (issuer 9c1aef…) on http://127.0.0.1:8787
 
   $ curl -s http://127.0.0.1:8787/healthz
   {"ok":true,"count":12}
@@ -131,11 +131,11 @@ The `tokio::sync::RwLock` is intentional: many readers can fetch in parallel; a 
   $ curl -s http://127.0.0.1:8787/receipts/abc123…
   {"version":1,"body":{...},"issuer":"…","signature":"…"}
 
-  $ curl -s http://127.0.0.1:8787/receipts/abc123… | uniclaw-verify --stdin --pubkey 9c1aef…
+  $ curl -s http://127.0.0.1:8787/receipts/abc123… | boardproof-verify --stdin --pubkey 9c1aef…
   ✓ verified
   ```
 
-  The hand-off from `uniclaw-host` (server) to `uniclaw-verify` (cold verifier) is the whole user experience: serve the receipt; verify it with a separate tool.
+  The hand-off from `boardproof-host` (server) to `boardproof-verify` (cold verifier) is the whole user experience: serve the receipt; verify it with a separate tool.
 
 ## Performance baseline (release, in-process via tower::oneshot)
 
@@ -160,4 +160,4 @@ These ship later, on purpose:
 
 ## In summary
 
-Step 9 (the first step of Phase 2) makes Uniclaw's verifiability promise externally visible. Receipts are now reachable at a URL. The server is honest about what it serves: it does not re-verify and does not vouch. Verification stays the client's job — which is the whole point of cold-verifiable receipts. With this step shipped, Uniclaw has a public surface an auditor can use today.
+Step 9 (the first step of Phase 2) makes BoardProof's verifiability promise externally visible. Receipts are now reachable at a URL. The server is honest about what it serves: it does not re-verify and does not vouch. Verification stays the client's job — which is the whole point of cold-verifiable receipts. With this step shipped, BoardProof has a public surface an auditor can use today.

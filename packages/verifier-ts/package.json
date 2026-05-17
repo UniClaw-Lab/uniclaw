@@ -1,7 +1,7 @@
 {
-  "name": "@uniclaw/verifier",
+  "name": "@boardproof/verifier",
   "version": "0.1.0",
-  "description": "Standalone TypeScript verifier for Uniclaw receipts. Recomputes the canonical body bytes (RFC 8785 JCS), the BLAKE3 content_id, and verifies the Ed25519 signature against the receipt's embedded issuer key. Browser + Node 20+. No native deps.",
+  "description": "Standalone TypeScript verifier for BoardProof receipts. Recomputes the canonical body bytes (RFC 8785 JCS), the BLAKE3 content_id, and verifies the Ed25519 signature against the receipt's embedded issuer key. Browser + Node 20+. No native deps.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,7 +12,7 @@
     }
   },
   "bin": {
-    "uniclaw-verify-ts": "./bin/verify-cli.mjs"
+    "boardproof-verify-ts": "./bin/verify-cli.mjs"
   },
   "files": [
     "dist",
@@ -44,7 +44,7 @@
     "node": ">=20"
   },
   "keywords": [
-    "uniclaw",
+    "boardproof",
     "receipt",
     "verifier",
     "ed25519",
@@ -55,9 +55,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/UniClaw-Lab/uniclaw.git",
+    "url": "git+https://github.com/UniClaw-Lab/boardproof.git",
     "directory": "packages/verifier-ts"
   },
   "license": "(MIT OR Apache-2.0)",
-  "homepage": "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/verifier-ts"
+  "homepage": "https://github.com/UniClaw-Lab/boardproof/tree/main/packages/verifier-ts"
 }

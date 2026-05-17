@@ -1,8 +1,8 @@
 {
-  "name": "uniclaw-workspace",
+  "name": "boardproof-workspace",
   "private": true,
   "version": "0.0.0-workspace",
-  "description": "Top-level npm workspace for Uniclaw's TypeScript packages. Not published. The packages themselves live under packages/.",
+  "description": "Top-level npm workspace for BoardProof's TypeScript packages. Not published. The packages themselves live under packages/.",
   "workspaces": [
     "packages/verifier-ts",
     "packages/client-ts"

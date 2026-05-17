@@ -2,14 +2,14 @@
 
 > **Phase:** 3 — Tools and Secrets
 > **PR:** _this PR_
-> **Crate introduced:** `uniclaw-tools`
-> **Crate updated:** `uniclaw-kernel` (new `KernelEvent::RecordToolExecution`)
+> **Crate introduced:** `boardproof-tools`
+> **Crate updated:** `boardproof-kernel` (new `KernelEvent::RecordToolExecution`)
 
 ## What is this step?
 
-This step opens **Phase 3** — the phase where Uniclaw moves from "the agent is authorized to do things" to "the agent actually *does* things, and we know what came back."
+This step opens **Phase 3** — the phase where BoardProof moves from "the agent is authorized to do things" to "the agent actually *does* things, and we know what came back."
 
-It ships the **architecture** for tool execution, not any actual tools. A new crate `uniclaw-tools` defines:
+It ships the **architecture** for tool execution, not any actual tools. A new crate `boardproof-tools` defines:
 
 - **What a tool is** — the `Tool` trait every backend (WASM, container, MCP, native) implements.
 - **What a tool can do** — a typed `Capability` enum with seven variants (`NetConnect`, `FileRead`, `FileWrite`, `ShellExec`, `EnvRead`, `LlmQuery`, `SecretRead`), each carrying a glob pattern.
@@ -22,7 +22,7 @@ And the kernel learns one new event: `KernelEvent::RecordToolExecution`. After a
 
 **No WASM runtime ships in this step.** That's step 14.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 ```
                  Caller orchestrates
@@ -122,7 +122,7 @@ The investigation done before designing this step turned up four contributions w
 - **`OpenClaw`'s gateway-level deny list for high-risk tools** — adopted philosophically as Constitution rule patterns (already supported). High-risk tool kinds get a `Deny` rule; that's where they belong, not in trait code.
 - **`ZeroClaw`'s signed manifests with Ed25519** — on the future list (a separate step), with default-on signature verification (the opposite of `ZeroClaw`'s default-off).
 
-No source borrowed from any of the four claws. Citations in `crates/uniclaw-tools/src/lib.rs` adopt-don't-copy section.
+No source borrowed from any of the four claws. Citations in `crates/boardproof-tools/src/lib.rs` adopt-don't-copy section.
 
 ## What you can do with this step today
 
@@ -131,7 +131,7 @@ No source borrowed from any of the four claws. Citations in `crates/uniclaw-tool
 - Submit a `Proposal` with `action.kind = "tool.<name>"` to the kernel; get back an `Allowed` receipt.
 - Call `host.call(&ToolCall)` to execute (sync).
 - Submit `KernelEvent::record_tool_execution(ToolExecution { ... })` to anchor the result.
-- Read the resulting receipt with `uniclaw-explain` — it shows the action kind, output hash, and provenance edges back to the authorization.
+- Read the resulting receipt with `boardproof-explain` — it shows the action kind, output hash, and provenance edges back to the authorization.
 
 ```rust
 // Sketch of the full flow (pseudo-code).
@@ -180,7 +180,7 @@ The `RecordToolExecution` cost is dominated by the Ed25519 verify of the prior r
 
 ## What this step does **not** ship
 
-- **No WASM runtime.** Step 14: `uniclaw-tools-wasm` with `wasmtime` + WIT Component Model.
+- **No WASM runtime.** Step 14: `boardproof-tools-wasm` with `wasmtime` + WIT Component Model.
 - **No real tool implementations.** HTTP fetch, file read, shell exec — these arrive alongside the WASM runtime.
 - **No runtime capability enforcement.** A tool that uses a capability not in its manifest currently isn't caught — capabilities are declared but not yet checked. Step 15 adds the host-layer enforcement (HTTP allowlist + SSRF defense, adopted from `IronClaw`).
 - **No signed manifests.** Step in the queue.

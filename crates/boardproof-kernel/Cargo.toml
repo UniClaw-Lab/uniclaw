@@ -1,0 +1,32 @@
+[package]
+name = "boardproof-kernel"
+description = "Trusted runtime core for BoardProof — the verifiable agent kernel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+boardproof-constitution.workspace = true
+boardproof-budget.workspace = true
+boardproof-approval.workspace = true
+boardproof-sleep.workspace = true
+boardproof-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+boardproof-store.workspace = true
+ed25519-dalek = { workspace = true }
+
+[lints]
+workspace = true

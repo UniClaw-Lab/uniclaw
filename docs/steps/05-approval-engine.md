@@ -2,16 +2,16 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #4
-> **Crate introduced:** `uniclaw-approval`
-> **Crates updated:** `uniclaw-kernel`, `uniclaw-constitution` (added `RuleVerdict::RequireApproval`)
+> **Crate introduced:** `boardproof-approval`
+> **Crates updated:** `boardproof-kernel`, `boardproof-constitution` (added `RuleVerdict::RequireApproval`)
 
 ## What is this step?
 
-This step makes Uniclaw able to **pause an action and ask a human**. When a Constitution rule says `RequireApproval`, the kernel stops, mints a **Pending** receipt, and waits. When the operator answers (Approved or Denied), the kernel mints the **final** receipt — chained to the Pending one with a provenance edge.
+This step makes BoardProof able to **pause an action and ask a human**. When a Constitution rule says `RequireApproval`, the kernel stops, mints a **Pending** receipt, and waits. When the operator answers (Approved or Denied), the kernel mints the **final** receipt — chained to the Pending one with a provenance edge.
 
 Before this step the kernel could only say *yes* or *no*. After this step it can say *wait*.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The approval engine is the bridge between the **automatic** and the **human-supervised** parts of the runtime. The Constitution can mark certain actions as needing approval. The kernel writes a Pending receipt. Some routing layer (Step 6) carries the question to the operator. The operator's answer comes back to the kernel as a `KernelEvent::ResolveApproval`.
 
@@ -70,7 +70,7 @@ pub enum ApprovalDecision {
 }
 ```
 
-Lives in the small `uniclaw-approval` crate. Tiny by design — it should be embeddable from anywhere.
+Lives in the small `boardproof-approval` crate. Tiny by design — it should be embeddable from anywhere.
 
 ### `KernelEvent::ResolveApproval`
 
@@ -98,7 +98,7 @@ When the kernel handles a `ResolveApproval`, it:
 - **Why not store pending state in the kernel?** Stateless kernel = simple kernel. The caller already needs the Pending receipt to render a UI to the operator; carrying it back adds zero burden.
 - **Why a four-step gate and not just "verify signature"?** Because a valid Pending receipt from a *different* kernel is still cryptographically valid — the issuer check stops cross-kernel injection. And a valid Pending receipt with a *different* action substituted is also signature-valid for the original action — the action-match check catches that.
 - **Why re-check budget at approve time?** Because the lease may have been spent down on parallel actions. The kernel re-checks; the receipt records `DeniedByBudgetAtApproveTime`; the audit trail tells the whole story.
-- **Why a separate `uniclaw-approval` crate for one enum?** So that Slack bots, dashboards, mobile apps, etc. can depend on the enum without pulling in the entire kernel.
+- **Why a separate `boardproof-approval` crate for one enum?** So that Slack bots, dashboards, mobile apps, etc. can depend on the enum without pulling in the entire kernel.
 
 ## What you can do with this step today
 
@@ -111,4 +111,4 @@ When the kernel handles a `ResolveApproval`, it:
 
 ## In summary
 
-Step 5 makes Uniclaw able to ask. The kernel does not store the question; the caller holds it. The kernel verifies the answer is real before honoring it. Every approval becomes a receipt with a provable link back to the question. This is what makes "the operator agreed to this action" something an auditor can verify cold, not just take on faith.
+Step 5 makes BoardProof able to ask. The kernel does not store the question; the caller holds it. The kernel verifies the answer is real before honoring it. Every approval becomes a receipt with a provable link back to the question. This is what makes "the operator agreed to this action" something an auditor can verify cold, not just take on faith.

@@ -1,0 +1,32 @@
+[package]
+name = "boardproof-tools-http"
+description = "HTTP fetch tool for BoardProof — capability-checked GET with SSRF defense, response-size bounds, and configurable timeout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+boardproof-receipt.workspace = true
+boardproof-tools.workspace = true
+boardproof-secrets.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
+serde_json.workspace = true
+ureq.workspace = true
+url.workspace = true
+base64.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+# Integration tests spin up a localhost HTTP server. Hand-rolled with
+# std's TcpListener to avoid pulling in axum/tokio in this crate's
+# test pipeline; the server is ~80 LOC.
+
+[lints]
+workspace = true

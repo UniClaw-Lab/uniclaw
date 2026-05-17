@@ -1,9 +1,9 @@
-// RFC 8785 JCS canonicalizer for Uniclaw receipt bodies.
+// RFC 8785 JCS canonicalizer for BoardProof receipt bodies.
 //
-// This is the TypeScript port of `crates/uniclaw-receipt/src/canonical.rs`.
-// The browser verifier (`crates/uniclaw-host/src/verify.html`) and
+// This is the TypeScript port of `crates/boardproof-receipt/src/canonical.rs`.
+// The browser verifier (`crates/boardproof-host/src/verify.html`) and
 // the Node conformance smoke
-// (`crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs`)
+// (`crates/boardproof-receipt/tests/vectors/conformance-smoke.mjs`)
 // embed equivalent JS implementations; this package is the
 // canonical TypeScript reference.
 //
@@ -12,7 +12,7 @@
 // (`canonical-v2.json`) the Rust snapshot test loads. If the
 // fixture passes here AND in Rust, both implementations agree.
 //
-// Scope: handles the shape Uniclaw receipts actually use — string
+// Scope: handles the shape BoardProof receipts actually use — string
 // keys, integer numbers only, ASCII-mostly strings. Floats throw
 // rather than emit potentially wrong bytes (matches Rust behavior,
 // since the schema has no float fields and a future addition must

@@ -2,7 +2,7 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #3 (bundled with budgets and explainer)
-> **Crate introduced:** `uniclaw-constitution`
+> **Crate introduced:** `boardproof-constitution`
 
 ## What is this step?
 
@@ -10,7 +10,7 @@ This step builds the **rules engine** that decides whether an action should be *
 
 The rules are written in a separate file (TOML format), not inside prompts. They are checked by code, not by the model. We call this the **Constitution** because it sits above the model in the same way a constitution sits above a government: even the most powerful agent cannot violate it.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The Constitution sits between the **model** and the **kernel**:
 

@@ -1,10 +1,10 @@
-// Verify a Uniclaw receipt: recompute the canonical body bytes,
+// Verify a BoardProof receipt: recompute the canonical body bytes,
 // recompute the content_id (BLAKE3), and check the Ed25519
 // signature against the embedded issuer key.
 //
 // This is the trust property the wedge rests on — every step here
 // runs locally; nothing is delegated to the host that served the
-// receipt. See `crates/uniclaw-host/src/verify.html` for the
+// receipt. See `crates/boardproof-host/src/verify.html` for the
 // browser sibling that does the same thing using
 // `crypto.subtle.verify`. The TS package uses `@noble/curves`
 // (audited, browser+Node, no native deps) for parity.
@@ -130,7 +130,7 @@ export async function verifyReceiptJson(json: string): Promise<VerifyResult> {
   return verifyReceipt(parsed as Receipt);
 }
 
-// Fetch a receipt URL (e.g. uniclaw-host's `/receipts/<hash>`) and
+// Fetch a receipt URL (e.g. boardproof-host's `/receipts/<hash>`) and
 // verify it. Uses the global `fetch`; works on Node 20+, Deno,
 // Bun, and browsers.
 export async function verifyReceiptUrl(url: string): Promise<VerifyResult> {

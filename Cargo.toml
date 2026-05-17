@@ -1,33 +1,33 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/uniclaw-receipt",
-    "crates/uniclaw-verify",
-    "crates/uniclaw-kernel",
-    "crates/uniclaw-constitution",
-    "crates/uniclaw-budget",
-    "crates/uniclaw-explain",
-    "crates/uniclaw-approval",
-    "crates/uniclaw-router",
-    "crates/uniclaw-store",
-    "crates/uniclaw-sleep",
-    "crates/uniclaw-host",
-    "crates/uniclaw-store-sqlite",
-    "crates/uniclaw-tools",
-    "crates/uniclaw-tools-http",
-    "crates/uniclaw-secrets",
-    "crates/uniclaw-tools-wasm",
-    "crates/uniclaw-redact",
+    "crates/boardproof-receipt",
+    "crates/boardproof-verify",
+    "crates/boardproof-kernel",
+    "crates/boardproof-constitution",
+    "crates/boardproof-budget",
+    "crates/boardproof-explain",
+    "crates/boardproof-approval",
+    "crates/boardproof-router",
+    "crates/boardproof-store",
+    "crates/boardproof-sleep",
+    "crates/boardproof-host",
+    "crates/boardproof-store-sqlite",
+    "crates/boardproof-tools",
+    "crates/boardproof-tools-http",
+    "crates/boardproof-secrets",
+    "crates/boardproof-tools-wasm",
+    "crates/boardproof-redact",
 ]
 
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
 rust-version = "1.95"
-authors = ["Uniclaw Contributors"]
+authors = ["BoardProof Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/uniclaw/uniclaw"
-homepage = "https://uniclaw.dev"
+repository = "https://github.com/BoardClaw-Labs/BoardProof"
+homepage = "https://github.com/BoardClaw-Labs/BoardProof"
 readme = "README.md"
 keywords = ["agent", "ai", "verifiable", "wasm", "security"]
 categories = ["command-line-utilities", "cryptography"]
@@ -39,28 +39,28 @@ ed25519-dalek = { version = "2.1", default-features = false, features = ["std", 
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
-# CLI for uniclaw-verify.
+# CLI for boardproof-verify.
 clap = { version = "4.5", default-features = false, features = ["std", "help", "usage", "error-context", "derive"] }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
-# Web stack — used only by uniclaw-host.
+# Web stack — used only by boardproof-host.
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal", "sync"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 
-# SQLite-backed ReceiptLog — used only by uniclaw-store-sqlite (and any
+# SQLite-backed ReceiptLog — used only by boardproof-store-sqlite (and any
 # binaries that opt into persistence). `bundled` statically links SQLite so
 # there's no system dependency; cost is ~1 MB binary size on the host crate.
 rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
 
-# Zeroize secret bytes on drop — used by uniclaw-secrets.
+# Zeroize secret bytes on drop — used by boardproof-secrets.
 # Tiny, audited, no_std-friendly. Provides a guarantee the compiler
 # doesn't optimize the zeroing away (which it can do for plain loops
 # clearing memory that's about to be deallocated).
 zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
 
-# HTTP client + URL parsing + base64 — used only by uniclaw-tools-http.
+# HTTP client + URL parsing + base64 — used only by boardproof-tools-http.
 # `ureq` is a synchronous HTTP client (matches the sync `Tool::call` trait);
 # `rustls` keeps TLS in pure Rust. `url` parses URLs robustly (including
 # IPv6-in-brackets and IDN). `base64` encodes response bodies for the
@@ -69,7 +69,7 @@ ureq = { version = "2.10", default-features = false, features = ["tls"] }
 url = { version = "2.5", default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
-# WebAssembly runtime — used only by uniclaw-tools-wasm.
+# WebAssembly runtime — used only by boardproof-tools-wasm.
 # `wasmtime` is the reference AOT-compiling WASM runtime with stable
 # Component Model support. Default features include the Cranelift
 # compiler, the JIT runtime, and component-model bindings — all of
@@ -88,7 +88,7 @@ wasmtime = "44"
 wasmtime-wasi = "44"
 wat = "1"
 
-# Regular expressions — used only by uniclaw-redact for compiled
+# Regular expressions — used only by boardproof-redact for compiled
 # pattern matching against tool-output bytes. Standard, fast,
 # well-tested. Brings ~2 MB of source deps; trimmed binary
 # contribution is small (<100 KB stripped). For v0 we accept
@@ -106,22 +106,22 @@ wat = "1"
 regex = "1.10"
 
 # Internal members.
-uniclaw-receipt = { path = "crates/uniclaw-receipt", version = "0.0.1" }
-uniclaw-kernel = { path = "crates/uniclaw-kernel", version = "0.0.1" }
-uniclaw-constitution = { path = "crates/uniclaw-constitution", version = "0.0.1" }
-uniclaw-budget = { path = "crates/uniclaw-budget", version = "0.0.1" }
-uniclaw-explain = { path = "crates/uniclaw-explain", version = "0.0.1" }
-uniclaw-approval = { path = "crates/uniclaw-approval", version = "0.0.1" }
-uniclaw-router = { path = "crates/uniclaw-router", version = "0.0.1" }
-uniclaw-store = { path = "crates/uniclaw-store", version = "0.0.1" }
-uniclaw-sleep = { path = "crates/uniclaw-sleep", version = "0.0.1" }
-uniclaw-host = { path = "crates/uniclaw-host", version = "0.0.1" }
-uniclaw-store-sqlite = { path = "crates/uniclaw-store-sqlite", version = "0.0.1" }
-uniclaw-tools = { path = "crates/uniclaw-tools", version = "0.0.1" }
-uniclaw-tools-http = { path = "crates/uniclaw-tools-http", version = "0.0.1" }
-uniclaw-secrets = { path = "crates/uniclaw-secrets", version = "0.0.1" }
-uniclaw-tools-wasm = { path = "crates/uniclaw-tools-wasm", version = "0.0.1" }
-uniclaw-redact = { path = "crates/uniclaw-redact", version = "0.0.1" }
+boardproof-receipt = { path = "crates/boardproof-receipt", version = "0.0.1" }
+boardproof-kernel = { path = "crates/boardproof-kernel", version = "0.0.1" }
+boardproof-constitution = { path = "crates/boardproof-constitution", version = "0.0.1" }
+boardproof-budget = { path = "crates/boardproof-budget", version = "0.0.1" }
+boardproof-explain = { path = "crates/boardproof-explain", version = "0.0.1" }
+boardproof-approval = { path = "crates/boardproof-approval", version = "0.0.1" }
+boardproof-router = { path = "crates/boardproof-router", version = "0.0.1" }
+boardproof-store = { path = "crates/boardproof-store", version = "0.0.1" }
+boardproof-sleep = { path = "crates/boardproof-sleep", version = "0.0.1" }
+boardproof-host = { path = "crates/boardproof-host", version = "0.0.1" }
+boardproof-store-sqlite = { path = "crates/boardproof-store-sqlite", version = "0.0.1" }
+boardproof-tools = { path = "crates/boardproof-tools", version = "0.0.1" }
+boardproof-tools-http = { path = "crates/boardproof-tools-http", version = "0.0.1" }
+boardproof-secrets = { path = "crates/boardproof-secrets", version = "0.0.1" }
+boardproof-tools-wasm = { path = "crates/boardproof-tools-wasm", version = "0.0.1" }
+boardproof-redact = { path = "crates/boardproof-redact", version = "0.0.1" }
 
 # --- Lints (apply to every workspace member) ---
 [workspace.lints.rust]

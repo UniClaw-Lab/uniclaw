@@ -2,7 +2,7 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #3 (bundled with constitution and budgets)
-> **Crate introduced:** `uniclaw-explain`
+> **Crate introduced:** `boardproof-explain`
 
 ## What is this step?
 
@@ -10,12 +10,12 @@ This step turns a signed receipt into a **plain-English explanation** that a non
 
 A receipt is a JSON object with cryptographic fields, hashes, and signatures. That's perfect for a verifier and an audit log, but it is *not* something a manager, regulator, or customer can read. The explainer fixes that.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The explainer is a **read-only** consumer of receipts. It does not produce them, store them, or affect the chain in any way. It just makes them human-friendly:
 
 ```
-Receipt JSON  -->  uniclaw-explain  -->  "On 2026-04-27 at 12:00 UTC,
+Receipt JSON  -->  boardproof-explain  -->  "On 2026-04-27 at 12:00 UTC,
                                           the agent tried to fetch
                                           https://example.com/. The
                                           action was Allowed because no
@@ -23,7 +23,7 @@ Receipt JSON  -->  uniclaw-explain  -->  "On 2026-04-27 at 12:00 UTC,
                                           verified."
 ```
 
-It exists as both a **library** (`uniclaw-explain` crate, embedded in any Rust program) and a **standalone binary** (`uniclaw-explain` CLI, ~727 KB stripped).
+It exists as both a **library** (`boardproof-explain` crate, embedded in any Rust program) and a **standalone binary** (`boardproof-explain` CLI, ~727 KB stripped).
 
 ## What problem does it solve technically?
 
@@ -74,13 +74,13 @@ It produces an `Explanation` struct that holds these pieces, plus two renderers:
 
 ```sh
 # Render a receipt as plain English
-uniclaw-explain --receipt path/to/receipt.json
+boardproof-explain --receipt path/to/receipt.json
 
 # Render as structured JSON
-uniclaw-explain --receipt path/to/receipt.json --format json
+boardproof-explain --receipt path/to/receipt.json --format json
 
 # Verify the signature too (requires --pubkey)
-uniclaw-explain --receipt path/to/receipt.json --pubkey <hex>
+boardproof-explain --receipt path/to/receipt.json --pubkey <hex>
 ```
 
 ### Rule classification
@@ -95,19 +95,19 @@ The explainer recognizes these prefixes and renders them with their human meanin
 
 ## Why this design choice and not another?
 
-- **Why a separate crate, not part of `uniclaw-receipt`?** Because the explainer needs `serde_json` with `std`, while the receipt format crate stays `no_std`. Keeping them separate keeps the verifier tiny.
+- **Why a separate crate, not part of `boardproof-receipt`?** Because the explainer needs `serde_json` with `std`, while the receipt format crate stays `no_std`. Keeping them separate keeps the verifier tiny.
 - **Why both library and binary?** The library is for any tool that wants to embed explanations (a dashboard, a Slack bot, a PDF renderer). The binary is for the obvious "I have a JSON file, what does it say?" workflow.
 - **Why `#[serde(tag, content)]` for `Verdict`?** It produces the JSON shape `{ "kind": "Pending", "data": { "rules_consulted": 3 } }`, which is easy for downstream tools to handle.
 - **Why classify rule IDs by string prefix?** Because rule IDs are stable across versions; classifying by prefix means new virtual rules can be added without changing the explainer.
 
 ## What you can do with this step today
 
-- Hand any receipt JSON to `uniclaw-explain` and get a plain-English summary.
-- Pipe the JSON output of `uniclaw-explain` into other tools.
+- Hand any receipt JSON to `boardproof-explain` and get a plain-English summary.
+- Pipe the JSON output of `boardproof-explain` into other tools.
 - Embed the library in your own programs to render explanations in a UI.
 
 ```sh
-$ uniclaw-explain --receipt approved_after_pending.json
+$ boardproof-explain --receipt approved_after_pending.json
 
 Receipt #1 in chain
 Issued at: 2026-04-27T12:00:00Z
@@ -122,4 +122,4 @@ Chain:     sequence 1, links to receipt with leaf_hash 0xabcd…
 
 ## In summary
 
-Step 4 makes receipts human-readable. It does not change what a receipt means — it just translates it. The library is small, the binary is small, and the rule of separation is clean: cryptography stays in `uniclaw-receipt`; presentation stays here.
+Step 4 makes receipts human-readable. It does not change what a receipt means — it just translates it. The library is small, the binary is small, and the rule of separation is clean: cryptography stays in `boardproof-receipt`; presentation stays here.

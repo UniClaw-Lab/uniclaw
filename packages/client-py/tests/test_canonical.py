@@ -1,5 +1,5 @@
 """Unit tests for the JCS canonicalizer. Mirrors the Rust unit tests
-in ``crates/uniclaw-receipt/src/canonical.rs`` and the TS unit tests
+in ``crates/boardproof-receipt/src/canonical.rs`` and the TS unit tests
 in ``packages/verifier-ts/tests/canonical.test.ts``."""
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from uniclaw_client._canonical import canonicalize_jcs
+from boardproof_client._canonical import canonicalize_jcs
 
 
 class TestPrimitives:

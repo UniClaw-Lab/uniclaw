@@ -1,5 +1,5 @@
 // Cross-language conformance test. Loads
-// `crates/uniclaw-receipt/tests/vectors/canonical-v2.json` — the
+// `crates/boardproof-receipt/tests/vectors/canonical-v2.json` — the
 // SAME fixture the Rust snapshot test uses — and asserts that
 // every vector's canonical bytes and BLAKE3 hash match the
 // committed expected values.
@@ -31,7 +31,7 @@ interface ConformanceFixture {
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(
   here,
-  "../../../crates/uniclaw-receipt/tests/vectors/canonical-v2.json",
+  "../../../crates/boardproof-receipt/tests/vectors/canonical-v2.json",
 );
 const fixture = JSON.parse(
   readFileSync(fixturePath, "utf8"),
@@ -39,7 +39,7 @@ const fixture = JSON.parse(
 
 describe("canonical-v2.json cross-language conformance", () => {
   it("loads the expected fixture format", () => {
-    expect(fixture.format).toBe("uniclaw-canonical-v2");
+    expect(fixture.format).toBe("boardproof-canonical-v2");
     expect(fixture.vectors.length).toBeGreaterThanOrEqual(5);
   });
 

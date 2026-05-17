@@ -1,5 +1,5 @@
 // Compute the BLAKE3 content_id of a receipt body. The kernel's
-// `Receipt::content_id` (in `crates/uniclaw-receipt/src/lib.rs`)
+// `Receipt::content_id` (in `crates/boardproof-receipt/src/lib.rs`)
 // is BLAKE3 over the canonical body bytes; this function is the
 // TS mirror.
 

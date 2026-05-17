@@ -2,7 +2,7 @@
 
 > **Phase:** 2 — Public Service
 > **PR:** _this PR_
-> **Crate updated:** `uniclaw-host` (new `GET /verify` route + embedded HTML page)
+> **Crate updated:** `boardproof-host` (new `GET /verify` route + embedded HTML page)
 
 ## What is this step?
 
@@ -10,7 +10,7 @@ This step closes the verifiability wedge to **non-engineers**. Until now, "anyon
 
 After this step, those people can paste a receipt JSON into a browser at `https://your-host/verify`, click **Verify**, and see ✓ or ✗ within milliseconds. **No backend call, no account, no install.** The page itself does the Ed25519 check using the browser's built-in `crypto.subtle` API.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Phase 2 is "Public Service" — the goal is making receipts publicly verifiable through a URL. Three steps shipped before this:
 
@@ -21,7 +21,7 @@ Step 11 Deep Sleep        — scheduled integrity walk receipts     ✓
 Step 12 /verify           — in-browser verifier  ← THIS STEP
 ```
 
-Together, they mean: an auditor opens `https://your-host/receipts/abc...` in the browser → sees JSON → copies it → goes to `https://your-host/verify` → pastes → sees ✓. The entire experience needs **no Uniclaw knowledge** beyond "paste this here, see if it's valid."
+Together, they mean: an auditor opens `https://your-host/receipts/abc...` in the browser → sees JSON → copies it → goes to `https://your-host/verify` → pastes → sees ✓. The entire experience needs **no BoardProof knowledge** beyond "paste this here, see if it's valid."
 
 ## What problem does it solve technically?
 
@@ -51,7 +51,7 @@ No JS crypto library means: ~8.5 KB total page, no supply-chain risk, no version
 
 ## How does it work in plain words?
 
-The verification pipeline in the page (mirroring [`uniclaw-receipt::crypto::verify`](../../crates/uniclaw-receipt/src/lib.rs)):
+The verification pipeline in the page (mirroring [`boardproof-receipt::crypto::verify`](../../crates/boardproof-receipt/src/lib.rs)):
 
 1. **Parse** the pasted JSON.
 2. **Reconstruct the canonical body bytes** the kernel signed:
@@ -100,15 +100,15 @@ If the user pastes a pretty-printed copy, parse-then-stringify-without-indent pr
 - **Why `include_str!` at compile time, not a `static/` directory at runtime?** Because the binary has to be deployable as a single file. No filesystem reads at runtime. No "where do I put the static files?" deploy step.
 - **Why `Cache-Control: no-store` on `/verify`?** Receipts are content-addressed (immutable); the verifier page is not — we need the freedom to ship updates to the JS logic without CDN caching getting in the way. The receipts themselves still ship `Cache-Control: public, max-age=31536000, immutable` (unchanged from step 9).
 - **Why no server-side verify endpoint?** Same reason as step 9: server-side verification would dilute the trust model. The user must verify on their own machine, in their own JS engine, against the receipt's embedded public key. Anything else is hand-waving.
-- **Why detect Ed25519 support at page load instead of falling back to a JS Ed25519 library?** Because shipping a JS crypto library is the supply-chain risk we're trying to avoid. A clear message ("upgrade your browser, or use `uniclaw-verify`") is honest. A polyfill we've never audited is dishonest.
+- **Why detect Ed25519 support at page load instead of falling back to a JS Ed25519 library?** Because shipping a JS crypto library is the supply-chain risk we're trying to avoid. A clear message ("upgrade your browser, or use `boardproof-verify`") is honest. A polyfill we've never audited is dishonest.
 - **Why no CSP header set?** v0 keeps the route handler small. A future hardening step can add `Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'` (the `'unsafe-inline'` is needed because the page inlines its own script and style — the page is the same kind of artifact a user can save locally; an audited inline script is preferable to an external one for this use case).
 
 ## What you can do with this step today
 
-- Open `http://127.0.0.1:8787/verify` against a running `uniclaw-host`.
+- Open `http://127.0.0.1:8787/verify` against a running `boardproof-host`.
 - Paste a receipt fetched from `/receipts/<hash>`.
 - Get a ✓ or ✗ in milliseconds.
-- Save the page locally (`Ctrl+S`) and verify receipts offline forever — no Uniclaw install.
+- Save the page locally (`Ctrl+S`) and verify receipts offline forever — no BoardProof install.
 - Hand the URL to an auditor.
 
 ## Performance baseline (release, in-process via tower::oneshot)
@@ -129,4 +129,4 @@ Handler cost is invisible behind any network round-trip. Browser-side Ed25519 ve
 
 ## In summary
 
-Step 12 makes Uniclaw's verifiability promise reach an auditor's hands. The page is small (~8.5 KB), self-contained, browser-native, and designed to be saved and run offline. No server-side trust extension. No JS crypto dependencies. The smoke test proves the canonical-body reconstruction matches the kernel's signed bytes byte-for-byte. With this step, the wedge is **complete for non-engineers** — Phase 2's stated goal is materially met.
+Step 12 makes BoardProof's verifiability promise reach an auditor's hands. The page is small (~8.5 KB), self-contained, browser-native, and designed to be saved and run offline. No server-side trust extension. No JS crypto dependencies. The smoke test proves the canonical-body reconstruction matches the kernel's signed bytes byte-for-byte. With this step, the wedge is **complete for non-engineers** — Phase 2's stated goal is materially met.

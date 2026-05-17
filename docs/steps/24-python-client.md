@@ -1,25 +1,25 @@
-# Phase 3.5 Step 24 — `uniclaw-client` Python SDK
+# Phase 3.5 Step 24 — `boardproof-client` Python SDK
 
 > **Phase:** 3.5 — Receipt-format hardening + adoption-foundations
 > **PR:** _this PR_
-> **New top-level dir:** `packages/client-py/` (third packaging unit; first two were `@uniclaw/verifier` and `@uniclaw/client`)
+> **New top-level dir:** `packages/client-py/` (third packaging unit; first two were `@boardproof/verifier` and `@boardproof/client`)
 > **Workspace:** still 17 of 20 Rust crates — Python package doesn't count
 
 ## What is this step?
 
-Step 22 closed threshold 1 *halfway* — the deep-strategy memory's literal portability test reads *"a TypeScript developer can `npm install` a verifier and validate a Uniclaw receipt minted on a Rust kernel"*. After step 22, that's true.
+Step 22 closed threshold 1 *halfway* — the deep-strategy memory's literal portability test reads *"a TypeScript developer can `npm install` a verifier and validate a BoardProof receipt minted on a Rust kernel"*. After step 22, that's true.
 
 But the SAME memory also says threshold 1 needs *"TS + at least one downstream language"*. **This step adds the downstream language.**
 
 Python is the natural pick:
 
-1. **Compliance tooling is Python.** SOC 2 / HIPAA / EU AI Act evidence pipelines run on Python. A `pip install uniclaw-client` is the on-ramp to every regulated-industry buyer.
+1. **Compliance tooling is Python.** SOC 2 / HIPAA / EU AI Act evidence pipelines run on Python. A `pip install boardproof-client` is the on-ramp to every regulated-industry buyer.
 2. **NemoClaw is Python.** A future NemoClaw integration uses this package directly.
 3. **Different language ⇒ stronger conformance.** Three implementations (Rust kernel, TS verifier, Python verifier) all running over `canonical-v2.json` and producing byte-identical output is the proof that the receipt format genuinely is cross-language.
 
 After this PR, the threshold-1 test is literally true in two languages, and the wedge has a strong "receipt-as-protocol" claim to lean on.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 ```
                   ┌──────────────────────────────┐
@@ -31,8 +31,8 @@ After this PR, the threshold-1 test is literally true in two languages, and the 
        ┌───────────────────────────┼───────────────────────────────┐
        ▼                           ▼                               ▼
   ┌─────────────────┐    ┌────────────────────┐         ┌────────────────────┐
-  │ Rust            │    │ @uniclaw/verifier  │         │ uniclaw-client     │
-  │ uniclaw-receipt │    │ + @uniclaw/client  │         │ (this PR)          │
+  │ Rust            │    │ @boardproof/verifier  │         │ boardproof-client     │
+  │ boardproof-receipt │    │ + @boardproof/client  │         │ (this PR)          │
   │ canonical.rs    │    │ src/canonical.ts   │         │ _canonical.py      │
   └─────────────────┘    └────────────────────┘         └────────────────────┘
         │                          │                              │
@@ -51,9 +51,9 @@ Before step 24, the answer was *"call the HTTP endpoints yourself, parse JSON, m
 After this PR, it's:
 
 ```python
-from uniclaw_client import UniclawClient, Action
+from boardproof_client import BoardProofClient, Action
 
-client = UniclawClient(base_url="http://127.0.0.1:8787")
+client = BoardProofClient(base_url="http://127.0.0.1:8787")
 
 decision = client.evaluate(Action(
     kind="http.fetch",
@@ -82,7 +82,7 @@ Same as the TS client. After every mint:
 3. It recomputes the BLAKE3 content_id and compares against (a) the server's claimed `content_id` AND (b) the URL hash.
 4. It verifies the Ed25519 signature against the receipt's embedded issuer key.
 
-If any check fails, `UniclawVerifyError` is raised before the caller sees the decision. The integration test exercises this with a `urlopen` patch that intercepts the GET response, mutates one byte of the body, and confirms the client rejects it (`test_verify_by_default_catches_tampered_receipt`).
+If any check fails, `BoardProofVerifyError` is raised before the caller sees the decision. The integration test exercises this with a `urlopen` patch that intercepts the GET response, mutates one byte of the body, and confirms the client rejects it (`test_verify_by_default_catches_tampered_receipt`).
 
 ### 4. "Why pynacl + blake3 + stdlib urllib?"
 
@@ -96,14 +96,14 @@ Total transitive size: ~5 MB installed (libsodium dominates). No native build re
 
 ## How does it work in plain words?
 
-Six modules, ~700 LOC across `src/uniclaw_client/`:
+Six modules, ~700 LOC across `src/boardproof_client/`:
 
 - **`_canonical.py`** — JCS port. Python integers + dict[str, ...] + list + str + bool + None. Floats raise.
 - **`_hex.py`** — hex helpers (lossless, hex-only).
 - **`types.py`** — frozen dataclasses for `Action`, `Decision` (discriminated union via `Literal["..."]` kind field), `Redaction`, `RuleMatch`, `VerifyResult`.
-- **`errors.py`** — `UniclawError` (HTTP-status-mapped) and `UniclawVerifyError`.
+- **`errors.py`** — `BoardProofError` (HTTP-status-mapped) and `BoardProofVerifyError`.
 - **`verify.py`** — `canonicalize`, `compute_content_id_*`, `verify_receipt*`. Uses `pynacl` + `blake3`.
-- **`client.py`** — `UniclawClient` class. Wraps `urlopen` with snake_case wire conversion at the boundary. Verify-by-default applies on every mint.
+- **`client.py`** — `BoardProofClient` class. Wraps `urlopen` with snake_case wire conversion at the boundary. Verify-by-default applies on every mint.
 
 A request flows like this:
 
@@ -130,16 +130,16 @@ return Decision
 
 - **Integrate from any Python runtime:**
   ```bash
-  pip install uniclaw-client
+  pip install boardproof-client
   ```
 - **Run the conformance test** to verify your install matches the canonical fixture:
   ```bash
   cd packages/client-py && python -m pytest tests/test_conformance.py
   ```
-- **Drive a full agent flow** end-to-end against `uniclaw-host`: see `tests/test_integration.py` for a worked example (allowed / pending → approved / denied / tool execution with secrets + redaction / tamper rejection).
+- **Drive a full agent flow** end-to-end against `boardproof-host`: see `tests/test_integration.py` for a worked example (allowed / pending → approved / denied / tool execution with secrets + redaction / tamper rejection).
 - **Use just the verifier** (no client needed) in a compliance audit script:
   ```python
-  from uniclaw_client import verify_receipt_url
+  from boardproof_client import verify_receipt_url
   for url in receipts_to_audit:
       r = verify_receipt_url(url)
       if not r.ok: raise AuditFailure(url, r.error)
@@ -152,7 +152,7 @@ return Decision
   - `test_conformance.py` — 11 cross-language assertions against `canonical-v2.json` (1 format check + 5 canonical bytes + 5 BLAKE3 content_ids). Loads the SAME fixture Rust and TS use.
   - `test_verify.py` — 13 sign+verify roundtrip + tamper detection tests using PyNaCl's deterministic Ed25519.
   - `test_client.py` — 19 unit tests with mocked `urlopen`: wire shape, decision narrowing, redaction camelCase ↔ snake_case, 400/404/409 mapping, baseUrl normalization, `get_receipt`.
-  - `test_integration.py` — 10 integration tests against a live `uniclaw-host` subprocess (opt-in via `UNICLAW_INTEGRATION=1`). Includes a tamper test that confirms verify-by-default rejects a mutated receipt over a real HTTP round-trip.
+  - `test_integration.py` — 10 integration tests against a live `boardproof-host` subprocess (opt-in via `BOARDPROOF_INTEGRATION=1`). Includes a tamper test that confirms verify-by-default rejects a mutated receipt over a real HTTP round-trip.
 - **mypy strict** clean across all 7 source files.
 - **All 4 Rust gates still clean** (no Rust changes): fmt, build, **test 408/408**, clippy.
 - **Bench** (`bench-results/24-python-client.txt`):
@@ -171,11 +171,11 @@ return Decision
 
 ## What this step does **not** ship
 
-- **PyPI publish.** Operations task — credentials, release process, namespace reservation on PyPI. The package code, tests, README, and bench are in this PR; publishing is `python -m build && twine upload` once `uniclaw-client` is reserved.
+- **PyPI publish.** Operations task — credentials, release process, namespace reservation on PyPI. The package code, tests, README, and bench are in this PR; publishing is `python -m build && twine upload` once `boardproof-client` is reserved.
 - **Async I/O variant.** Sync first. An `aiohttp`-based async sibling can land later if there's demand. The trust model is identical; only the I/O transport differs.
 - **Go / Swift / Java siblings.** Each will conform to the same wire format. Future steps.
 - **Schema-version-1 fixture in the conformance test.** v1 receipts use a different canonicalization (legacy `json.dumps`); the conformance fixture is v2-only. v1 verification still works in `verify_receipt` because the canonicalizer dispatches on `schema_version`.
-- **A bundled CLI** (`uniclaw-verify-py`). The TS package shipped one as a convenience; the Python package focuses on library use. Anyone wanting a CLI can `python -m uniclaw_client.verify` in a follow-up.
+- **A bundled CLI** (`boardproof-verify-py`). The TS package shipped one as a convenience; the Python package focuses on library use. Anyone wanting a CLI can `python -m boardproof_client.verify` in a follow-up.
 
 ## Performance / size
 
@@ -196,7 +196,7 @@ Step 24 closes threshold 1 in the strongest possible way. The receipt is now:
 
 - **Portable** — Rust + TypeScript + Python all produce byte-identical canonical output; all three verify cold.
 - **Programmable** in three languages.
-- **Installable** via `pip install uniclaw-client` (operations PR away from being on PyPI).
+- **Installable** via `pip install boardproof-client` (operations PR away from being on PyPI).
 
 Threshold status:
 

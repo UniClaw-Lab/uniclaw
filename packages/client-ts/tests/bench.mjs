@@ -1,4 +1,4 @@
-// Bench harness for @uniclaw/client. Spawns uniclaw-host and
+// Bench harness for @boardproof/client. Spawns boardproof-host and
 // measures end-to-end client.evaluate() latency under three modes:
 //
 //   (a) verify=true   — submit + verify by re-fetching + recheck
@@ -6,7 +6,7 @@
 //   (c) raw HTTP fetch (no client, no verify) — keepalive baseline
 //
 // Run:
-//   cargo build --release --bin uniclaw-host -p uniclaw-host
+//   cargo build --release --bin boardproof-host -p boardproof-host
 //   node tests/bench.mjs
 //
 // Output goes to stdout; redirect to bench-results/22-typescript-client.txt.
@@ -17,11 +17,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 
-import { UniclawClient } from "../dist/index.js";
+import { BoardProofClient } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "../../..");
-const HOST_BIN = resolve(REPO_ROOT, "target/release/uniclaw-host");
+const HOST_BIN = resolve(REPO_ROOT, "target/release/boardproof-host");
 const FIXTURE = resolve(here, "fixtures/test-constitution.toml");
 const SEED_HEX = "2a".repeat(32);
 const BENCH_TOKEN_HEX = "ab".repeat(32);
@@ -80,7 +80,7 @@ function fmt(r) {
 const N = 200;
 
 // (a) verify=true (default)
-const clientVerify = new UniclawClient({ baseUrl, bearerToken: BENCH_TOKEN_HEX });
+const clientVerify = new BoardProofClient({ baseUrl, bearerToken: BENCH_TOKEN_HEX });
 const r1 = await timeRun(
   "client.evaluate verify=true",
   () => clientVerify.evaluate(ACTION),
@@ -88,7 +88,7 @@ const r1 = await timeRun(
 );
 
 // (b) verify=false
-const clientNoVerify = new UniclawClient({
+const clientNoVerify = new BoardProofClient({
   baseUrl,
   verifyByDefault: false,
   bearerToken: BENCH_TOKEN_HEX,
@@ -170,7 +170,7 @@ const r5 = await timeRun(
   Math.floor(N / 2),
 );
 
-console.log("=== @uniclaw/client end-to-end latency bench ===");
+console.log("=== @boardproof/client end-to-end latency bench ===");
 console.log(`baseUrl=${baseUrl}`);
 console.log(`node=${process.version}`);
 console.log(`host bin=${HOST_BIN}`);

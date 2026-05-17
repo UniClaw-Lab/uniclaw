@@ -1,7 +1,7 @@
-// Public types for `@uniclaw/client`. Shapes are camelCased for
+// Public types for `@boardproof/client`. Shapes are camelCased for
 // idiomatic TypeScript; the client transparently converts to/from
 // the snake_cased wire format defined in
-// `crates/uniclaw-host/src/api.rs`.
+// `crates/boardproof-host/src/api.rs`.
 
 /// User-facing action shape. `inputHash` is a 64-char hex string
 /// committing to whatever bytes the agent intends to act on (e.g.
@@ -61,7 +61,7 @@ export interface DecisionBase {
   schemaVersion: number;
   /// Step 19a: operator-chosen identifier for the signing key
   /// when the server's signer was configured with one (`--key-id`
-  /// on `uniclaw-host`). Absent when the signer has no `key_id`.
+  /// on `boardproof-host`). Absent when the signer has no `key_id`.
   /// Use it to correlate with an external key directory entry
   /// (rotation, revocation, expiry).
   keyId?: string;

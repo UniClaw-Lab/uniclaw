@@ -1,4 +1,4 @@
-# Uniclaw Constitution: Solo Developer Mode
+# BoardProof Constitution: Solo Developer Mode
 #
 # Conservative defaults for a single operator running an agent on their own
 # workstation. Blocks the most common foot-guns: arbitrary shell, financial

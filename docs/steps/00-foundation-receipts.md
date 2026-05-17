@@ -1,16 +1,16 @@
 # Step 0 (Foundation) — The Receipt Format
 
 > **Phase:** 0 — Receipt-First Foundation
-> **Crates introduced:** `uniclaw-receipt`, `uniclaw-verify`
+> **Crates introduced:** `boardproof-receipt`, `boardproof-verify`
 > **Spec:** `RFCS/0001-receipt-format.md`
 
 ## What is this step?
 
-This is the very first thing built in Uniclaw. Before any agent, any kernel, any tool — we defined **what a receipt looks like** and **how to verify one**.
+This is the very first thing built in BoardProof. Before any agent, any kernel, any tool — we defined **what a receipt looks like** and **how to verify one**.
 
-A receipt is the smallest unit of evidence in Uniclaw. Every later step has to fit into this shape, which is why we designed it first.
+A receipt is the smallest unit of evidence in BoardProof. Every later step has to fit into this shape, which is why we designed it first.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Receipts are the **output** of every kernel action. The kernel produces them. The Constitution rules produce them. The budget engine produces them. The approval engine produces them. The Light Sleep cleanup produces them. They are the common currency of the entire runtime.
 
@@ -21,7 +21,7 @@ Receipts are the **output** of every kernel action. The kernel produces them. Th
 +---------------------+        +-----------------+
 ```
 
-If you removed receipts from Uniclaw, you'd have a generic agent runtime. Receipts are what make Uniclaw, *Uniclaw*.
+If you removed receipts from BoardProof, you'd have a generic agent runtime. Receipts are what make BoardProof, *BoardProof*.
 
 ## What problem does it solve technically?
 
@@ -96,10 +96,10 @@ To verify a receipt:
 
 Done. No internet, no database, no API calls. **Cold verification.**
 
-The standalone tool `uniclaw-verify` is exactly this, packaged as a CLI:
+The standalone tool `boardproof-verify` is exactly this, packaged as a CLI:
 
 ```sh
-uniclaw-verify --receipt path/to/receipt.json --pubkey <hex>
+boardproof-verify --receipt path/to/receipt.json --pubkey <hex>
 ```
 
 It returns 0 on success, non-zero on failure.
@@ -116,8 +116,8 @@ A few decisions worth calling out:
 ## What you can do with this step today
 
 - Construct a receipt manually and sign it with the `crypto::sign` helper.
-- Verify a receipt cold with the `uniclaw-verify` binary.
-- Use the `uniclaw-receipt` types in any Rust program that needs to produce or consume receipts.
+- Verify a receipt cold with the `boardproof-verify` binary.
+- Use the `boardproof-receipt` types in any Rust program that needs to produce or consume receipts.
 
 ## In summary
 

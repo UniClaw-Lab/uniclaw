@@ -1,0 +1,37 @@
+[package]
+name = "boardproof-explain"
+description = "Cold receipt explainer for BoardProof — walks any Receipt and produces a human-readable decision tree."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "boardproof_explain"
+path = "src/lib.rs"
+
+[[bin]]
+name = "boardproof-explain"
+path = "src/main.rs"
+
+[dependencies]
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+boardproof-budget.workspace = true
+# Explain uses #[serde(tag, content)] which requires alloc/std machinery.
+serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+
+[lints]
+workspace = true

@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// Tiny CLI around `@uniclaw/verifier`. Pairs with the demo binary:
+// Tiny CLI around `@boardproof/verifier`. Pairs with the demo binary:
 //
-//   $ cargo run --release --example end-to-end-demo -p uniclaw-host
+//   $ cargo run --release --example end-to-end-demo -p boardproof-host
 //   ...prints 6 receipt URLs...
 //
-//   $ npx uniclaw-verify-ts http://127.0.0.1:PORT/receipts/HASH
+//   $ npx boardproof-verify-ts http://127.0.0.1:PORT/receipts/HASH
 //   ✓ verified | issuer=2a... seq=0 decision=allowed
 //
 // Usage:
-//   uniclaw-verify-ts <url-or-path>
+//   boardproof-verify-ts <url-or-path>
 //
-// Where the argument is either a `http(s)://` URL, a `uniclaw://`-style
+// Where the argument is either a `http(s)://` URL, a `boardproof://`-style
 // receipt URL the host produced, or a local JSON file path. Exit
 // code 0 = verified, 1 = failed verification, 2 = bad input.
 
@@ -20,7 +20,7 @@ import { verifyReceiptJson, verifyReceiptUrl } from "../dist/index.js";
 async function main() {
   const arg = process.argv[2];
   if (!arg) {
-    console.error("usage: uniclaw-verify-ts <url-or-path>");
+    console.error("usage: boardproof-verify-ts <url-or-path>");
     process.exit(2);
   }
 

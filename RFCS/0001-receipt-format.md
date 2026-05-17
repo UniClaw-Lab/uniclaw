@@ -3,35 +3,35 @@
 | Field | Value |
 | --- | --- |
 | **Status** | Draft |
-| **Author** | Uniclaw Contributors |
+| **Author** | BoardProof Contributors |
 | **Created** | 2026-04-26 |
 | **Last updated** | 2026-05-08 (v2: RFC 8785 canonicalization) |
 | **Schema version** | 2 |
 
 ## 0. Canonicalization (v2 +)
 
-**Receipts at `schema_version >= 2` use [RFC 8785 JSON Canonicalization Scheme (JCS)](https://www.rfc-editor.org/rfc/rfc8785).** The canonical encoding is deterministic across implementations and languages — Rust, TypeScript, Go, Python verifiers running JCS over the same logical body produce byte-identical bytes. That property is what makes "verify a Uniclaw receipt with a small binary in any language" actually work in practice.
+**Receipts at `schema_version >= 2` use [RFC 8785 JSON Canonicalization Scheme (JCS)](https://www.rfc-editor.org/rfc/rfc8785).** The canonical encoding is deterministic across implementations and languages — Rust, TypeScript, Go, Python verifiers running JCS over the same logical body produce byte-identical bytes. That property is what makes "verify a BoardProof receipt with a small binary in any language" actually work in practice.
 
 JCS rules (summary):
 
 - **Object keys sorted by UTF-16 code unit order** (RFC 8785 §3.2.3).
-- **Number formatting per ECMA-262 §7.1.12.1.** Integers emit as decimal with no leading zeros, no `+` sign, no exponent. Uniclaw's schema has no floats; the encoder panics on any non-integer Number as a load-bearing assertion against future drift.
+- **Number formatting per ECMA-262 §7.1.12.1.** Integers emit as decimal with no leading zeros, no `+` sign, no exponent. BoardProof's schema has no floats; the encoder panics on any non-integer Number as a load-bearing assertion against future drift.
 - **Standard string escapes** (RFC 8785 §3.2.2): `"` → `\"`, `\\` → `\\\\`, controls (U+0000..U+001F) → `\uXXXX` lowercase, `\b` `\f` `\n` `\r` `\t` use named escapes, everything else UTF-8 verbatim. The slash `/` is **not** escaped.
 - **No whitespace.** No spaces, no newlines, no indentation.
 
 **Backwards compatibility**: Receipts with `schema_version <= 1` use the pre-step-19 `serde_json` default encoding (struct-declaration field order). Verifiers dispatch on `body.schema_version`. v1 receipts in the wild continue to verify under v1 rules; new receipts go out as v2.
 
-**Test vectors** live at [`crates/uniclaw-receipt/tests/vectors/canonical-v2.json`](../crates/uniclaw-receipt/tests/vectors/canonical-v2.json) — five representative receipt bodies with their expected canonical bytes (hex) and BLAKE3 hashes. Cross-language verifiers should pass these vectors as their conformance test; see [`tests/vectors/conformance-smoke.mjs`](../crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs) for a Node.js example proving the JS canonicalizer in `verify.html` matches the Rust output byte-for-byte (the same JCS implementation that `crates/uniclaw-host/src/verify.html` ships in the browser verifier).
+**Test vectors** live at [`crates/boardproof-receipt/tests/vectors/canonical-v2.json`](../crates/boardproof-receipt/tests/vectors/canonical-v2.json) — five representative receipt bodies with their expected canonical bytes (hex) and BLAKE3 hashes. Cross-language verifiers should pass these vectors as their conformance test; see [`tests/vectors/conformance-smoke.mjs`](../crates/boardproof-receipt/tests/vectors/conformance-smoke.mjs) for a Node.js example proving the JS canonicalizer in `verify.html` matches the Rust output byte-for-byte (the same JCS implementation that `crates/boardproof-host/src/verify.html` ships in the browser verifier).
 
 ## 1. Summary
 
-This RFC defines the **Uniclaw receipt format** — the signed, content-addressed
-record that a Uniclaw runtime produces for every consequential agent action.
+This RFC defines the **BoardProof receipt format** — the signed, content-addressed
+record that a BoardProof runtime produces for every consequential agent action.
 A receipt is the canonical artifact a third party (auditor, regulator,
 customer, judge) consults to verify what an agent did, **without trusting the
 runtime that produced it**.
 
-A standalone verifier, [`uniclaw-verify`](../crates/uniclaw-verify), checks
+A standalone verifier, [`boardproof-verify`](../crates/boardproof-verify), checks
 receipt validity in ≤ 200 LOC and ~720 KiB stripped. Anyone can install and
 audit it; that is the entire point.
 
@@ -42,7 +42,7 @@ Every other agent runtime in the *claw* ecosystem (`openclaw`, `zeroclaw`,
 **logs**: useful for the operator, opaque to outsiders, easy to tamper with,
 trivial to drop. Logs are not evidence.
 
-Uniclaw bets that the next decade of agent regulation (EU AI Act Article 12,
+BoardProof bets that the next decade of agent regulation (EU AI Act Article 12,
 SOC2 expansion, healthcare and finance compliance regimes) will demand
 *verifiable* records. A receipt is what an auditor accepts.
 
@@ -50,14 +50,14 @@ This RFC fixes the wire format so:
 
 1. The kernel and the verifier can be implemented independently and stay
    compatible.
-2. Receipt URLs (`uniclaw://receipt/<hash>`) remain stable across kernel
+2. Receipt URLs (`boardproof://receipt/<hash>`) remain stable across kernel
    upgrades.
 3. Compliance teams can build tooling against a stable spec.
 
 ## 3. Goals
 
 - **Cold-verifiable** by anyone with the standalone verifier binary, no
-  Uniclaw kernel install.
+  BoardProof kernel install.
 - **Content-addressable**: receipt id = `BLAKE3(canonical body)`.
 - **Cryptographically bound** to the issuer: Ed25519 signature over the
   canonical encoding of the body.
@@ -160,7 +160,7 @@ These will be additive — JSON + Ed25519 is the canonical baseline.
 | `constitution_rules[]` | array | yes (may be empty) | Constitution rules consulted, with `matched` flags. |
 | `provenance[]` | array | yes (may be empty) | Typed edges (§7). |
 | `redactor_stack_hash` | hex(32) \| null | yes | BLAKE3 of the ordered list of redactor identifiers, when redaction ran. |
-| `key_id` | string | **no** (additive in rev 2.1) | Opaque operator-chosen identifier for the signing key — e.g. `"prod-2026"`, `"hsm-3"`, a UUID. The kernel embeds it when the signer was configured with one (`--key-id` on `uniclaw-host`). **Omitted entirely** from the canonical bytes when the signer has no `key_id` set, so pre-rev-2.1 receipts and post-rev-2.1 receipts from signers without a `key_id` remain byte-identical. The wire `schema_version` does **not** change (additive optional field). Auditors use `key_id` to correlate a receipt with an external **key directory** entry (rotation start/end, revocation, expiry). The trust anchor for signature verification remains the *bytes* of the issuer public key; `key_id` is audit-only metadata. |
+| `key_id` | string | **no** (additive in rev 2.1) | Opaque operator-chosen identifier for the signing key — e.g. `"prod-2026"`, `"hsm-3"`, a UUID. The kernel embeds it when the signer was configured with one (`--key-id` on `boardproof-host`). **Omitted entirely** from the canonical bytes when the signer has no `key_id` set, so pre-rev-2.1 receipts and post-rev-2.1 receipts from signers without a `key_id` remain byte-identical. The wire `schema_version` does **not** change (additive optional field). Auditors use `key_id` to correlate a receipt with an external **key directory** entry (rotation start/end, revocation, expiry). The trust anchor for signature verification remains the *bytes* of the issuer public key; `key_id` is audit-only metadata. |
 | `merkle_leaf` | object | yes | Position in the Merkle audit chain (§8). |
 
 ### 6.3 Hex encoding
@@ -174,7 +174,7 @@ hex; encoders MUST emit lowercase.
 The signature covers, and the content id is computed over, the JSON serialization
 of the **body** as produced by `serde_json::to_vec`:
 
-- Field order: declaration order from the [Rust type definitions](../crates/uniclaw-receipt/src/lib.rs).
+- Field order: declaration order from the [Rust type definitions](../crates/boardproof-receipt/src/lib.rs).
 - No whitespace, no pretty-printing.
 - Numeric values: integers as JSON numbers; no scientific notation.
 - Strings: minimal escaping per RFC 8259.
@@ -246,14 +246,14 @@ chain offline if the kernel publishes them.
 ## 9. Content addressing and URL form
 
 ```text
-uniclaw://receipt/<hex-id>
+boardproof://receipt/<hex-id>
 ```
 
 - `<hex-id>` is the lowercase-hex BLAKE3 of the canonical body (§6.4).
 - Two receipts with identical bodies but different signatures share the same
   id (signature is part of the wrapper, not the body). This is by design — it
   lets multiple issuers co-sign a body as evidence.
-- An optional public-URL form is `https://uniclaw.dev/r/<hex-id>` once
+- An optional public-URL form is `https://boardproof.dev/r/<hex-id>` once
   hosting is operational.
 
 ## 10. Verification algorithm
@@ -296,11 +296,11 @@ Steps 1–5 are mandatory. Steps 6+ are caller-driven.
 
 ## 13. Reference implementation
 
-- **Types**: [`crates/uniclaw-receipt/src/lib.rs`](../crates/uniclaw-receipt/src/lib.rs)
+- **Types**: [`crates/boardproof-receipt/src/lib.rs`](../crates/boardproof-receipt/src/lib.rs)
 - **Sign + verify (`crypto` feature)**: same crate, `crypto` module.
-- **Standalone verifier binary**: [`crates/uniclaw-verify`](../crates/uniclaw-verify)
-- **Sample mint**: [`crates/uniclaw-verify/examples/mint-sample.rs`](../crates/uniclaw-verify/examples/mint-sample.rs)
-- **Round-trip integration tests**: [`crates/uniclaw-verify/tests/round_trip.rs`](../crates/uniclaw-verify/tests/round_trip.rs)
+- **Standalone verifier binary**: [`crates/boardproof-verify`](../crates/boardproof-verify)
+- **Sample mint**: [`crates/boardproof-verify/examples/mint-sample.rs`](../crates/boardproof-verify/examples/mint-sample.rs)
+- **Round-trip integration tests**: [`crates/boardproof-verify/tests/round_trip.rs`](../crates/boardproof-verify/tests/round_trip.rs)
 
 ## 14. Open questions
 
@@ -319,13 +319,13 @@ Steps 1–5 are mandatory. Steps 6+ are caller-driven.
 
 This RFC is considered "Implemented" when:
 
-- [x] Receipt types ship in `uniclaw-receipt`.
+- [x] Receipt types ship in `boardproof-receipt`.
 - [x] Standalone verifier binary verifies a hand-crafted receipt cold.
 - [x] Round-trip integration test passes (sign with a fresh key, serialize,
       verify via subprocess).
 - [x] Tamper tests fail (bad signature, mutated body, wrong issuer,
       unsupported version).
-- [ ] Public website hosts a paste-and-verify playground at `uniclaw.dev`.
+- [ ] Public website hosts a paste-and-verify playground at `boardproof.dev`.
 - [ ] An external security researcher verifies a receipt cold with the
       standalone binary and reports the experience.
 

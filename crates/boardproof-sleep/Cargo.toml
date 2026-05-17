@@ -1,0 +1,26 @@
+[package]
+name = "boardproof-sleep"
+description = "Sleep stages for BoardProof — Light/REM/Deep Sleep cleanup, reflection, and promotion."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+boardproof-receipt.workspace = true
+boardproof-store.workspace = true
+
+[dev-dependencies]
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+ed25519-dalek = { workspace = true }
+blake3.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

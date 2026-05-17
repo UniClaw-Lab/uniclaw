@@ -2,7 +2,7 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #3 (bundled with constitution and explainer)
-> **Crate introduced:** `uniclaw-budget`
+> **Crate introduced:** `boardproof-budget`
 
 ## What is this step?
 
@@ -10,7 +10,7 @@ This step gives the kernel **numerical spending limits** for every action: bytes
 
 Budgets are not advisory. They are enforced by the kernel. An action that would exceed the budget gets a Denied receipt, with the budget rule recorded.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Budgets live alongside the Constitution. After the Constitution decides the action is permitted, the kernel asks: "do you have the budget?" If yes, the action proceeds. If no, the kernel mints a Denied receipt explaining which dimension was exhausted.
 
@@ -29,7 +29,7 @@ Three problems:
 
 ### 1. "How do I cap what an action can use?"
 
-In other agent runtimes, "limits" are usually advisory or middleware-implemented. They can be bypassed if the tool author forgets. In Uniclaw, the kernel itself runs the budget check before producing an Allowed receipt — there is no path that skips it.
+In other agent runtimes, "limits" are usually advisory or middleware-implemented. They can be bypassed if the tool author forgets. In BoardProof, the kernel itself runs the budget check before producing an Allowed receipt — there is no path that skips it.
 
 ### 2. "How do limits compose when one tool delegates to another?"
 

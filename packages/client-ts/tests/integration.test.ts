@@ -1,22 +1,22 @@
-// Integration test for `@uniclaw/client`. Spawns a real
-// `uniclaw-host` subprocess in proposal-API mode, drives the
+// Integration test for `@boardproof/client`. Spawns a real
+// `boardproof-host` subprocess in proposal-API mode, drives the
 // client through every decision flow, and asserts that the
-// minted receipts verify under `@uniclaw/verifier`.
+// minted receipts verify under `@boardproof/verifier`.
 //
-// **Off by default.** Without `UNICLAW_INTEGRATION=1`, the suite
+// **Off by default.** Without `BOARDPROOF_INTEGRATION=1`, the suite
 // skips itself with a console hint. This keeps `npm test` working
 // in environments where the Rust toolchain isn't available
 // (e.g. consumer CI that just wants to typecheck the npm package).
 //
 // The release binary must already exist at
-// `target/release/uniclaw-host`. We don't run `cargo build` from
+// `target/release/boardproof-host`. We don't run `cargo build` from
 // here — that's the developer's job, and CI does it explicitly.
 //
 // Lifecycle:
-//   1. `beforeAll`: spawn `uniclaw-host --constitution ... --bind 127.0.0.1:0`.
+//   1. `beforeAll`: spawn `boardproof-host --constitution ... --bind 127.0.0.1:0`.
 //      Read stderr until we see `listening on http://127.0.0.1:<port>`.
 //      Stash the port.
-//   2. Per-test: drive `UniclawClient` against `http://127.0.0.1:<port>`.
+//   2. Per-test: drive `BoardProofClient` against `http://127.0.0.1:<port>`.
 //   3. `afterAll`: SIGINT the subprocess for graceful shutdown.
 
 import { ChildProcess, spawn } from "node:child_process";
@@ -26,15 +26,15 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { UniclawClient } from "../src/index.js";
+import { BoardProofClient } from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "../../..");
-const HOST_BIN = resolve(REPO_ROOT, "target/release/uniclaw-host");
+const HOST_BIN = resolve(REPO_ROOT, "target/release/boardproof-host");
 const FIXTURE = resolve(here, "fixtures/test-constitution.toml");
 const SEED_HEX = "2a".repeat(32);
 
-const INTEGRATION = process.env["UNICLAW_INTEGRATION"] === "1";
+const INTEGRATION = process.env["BOARDPROOF_INTEGRATION"] === "1";
 
 let child: ChildProcess | undefined;
 let baseUrl = "";
@@ -43,7 +43,7 @@ async function startHost(): Promise<string> {
   if (!existsSync(HOST_BIN)) {
     throw new Error(
       `release binary missing: ${HOST_BIN}\n` +
-        `Run \`cargo build --release --bin uniclaw-host -p uniclaw-host\` first.`,
+        `Run \`cargo build --release --bin boardproof-host -p boardproof-host\` first.`,
     );
   }
   // Step 25: the binary refuses to start in proposal mode without
@@ -69,7 +69,7 @@ async function startHost(): Promise<string> {
   // stderr. The binary prints that synchronously after `bind`.
   const url = await new Promise<string>((resolveLine, reject) => {
     const timer = setTimeout(
-      () => reject(new Error("uniclaw-host did not bind within 10 s")),
+      () => reject(new Error("boardproof-host did not bind within 10 s")),
       10_000,
     );
     let buf = "";
@@ -88,7 +88,7 @@ async function startHost(): Promise<string> {
     });
     proc.once("exit", (code) => {
       clearTimeout(timer);
-      reject(new Error(`uniclaw-host exited early with code ${code}: ${buf}`));
+      reject(new Error(`boardproof-host exited early with code ${code}: ${buf}`));
     });
   });
 
@@ -108,7 +108,7 @@ async function stopHost(): Promise<void> {
 
 // Top-level `describe.skipIf(...)` — the whole suite skips if the
 // integration flag isn't set.
-describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
+describe.skipIf(!INTEGRATION)("client ↔ boardproof-host integration", () => {
   beforeAll(async () => {
     baseUrl = await startHost();
   }, 15_000);
@@ -118,7 +118,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   });
 
   it("evaluate({allowed action}) verifies cold", async () => {
-    const client = new UniclawClient({ baseUrl });
+    const client = new BoardProofClient({ baseUrl });
     const decision = await client.evaluate({
       kind: "http.fetch",
       target: "https://example.com/data",
@@ -133,7 +133,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   });
 
   it("evaluate({denied action}) returns a Denied", async () => {
-    const client = new UniclawClient({ baseUrl });
+    const client = new BoardProofClient({ baseUrl });
     const decision = await client.evaluate({
       kind: "shell.exec",
       target: "rm -rf /",
@@ -143,7 +143,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   });
 
   it("pending → approve flow returns Approved + links via prev_hash", async () => {
-    const client = new UniclawClient({ baseUrl });
+    const client = new BoardProofClient({ baseUrl });
     const pending = await client.evaluate({
       kind: "http.fetch",
       target: "https://example.com/admin/secrets",
@@ -167,7 +167,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   });
 
   it("pending → deny flow returns Denied with narrowed type", async () => {
-    const client = new UniclawClient({ baseUrl });
+    const client = new BoardProofClient({ baseUrl });
     const pending = await client.evaluate({
       kind: "http.fetch",
       target: "https://example.com/admin/other",
@@ -181,7 +181,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   it("verify-by-default catches a tampered receipt", async () => {
     // Mint a real allowed receipt, then intercept the verify GET
     // with a tampered body. The client should reject.
-    const realClient = new UniclawClient({ baseUrl, verifyByDefault: false });
+    const realClient = new BoardProofClient({ baseUrl, verifyByDefault: false });
     const real = await realClient.evaluate({
       kind: "http.fetch",
       target: "https://example.com/tamper",
@@ -205,7 +205,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
       }
       return resp;
     };
-    const evilClient = new UniclawClient({
+    const evilClient = new BoardProofClient({
       baseUrl,
       fetch: tamperingFetch,
       verifyByDefault: true,
@@ -216,11 +216,11 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
         target: "https://example.com/tamper-trip",
         inputHash: "ee".repeat(32),
       }),
-    ).rejects.toThrow(/UniclawVerifyError/);
+    ).rejects.toThrow(/BoardProofVerifyError/);
   });
 
-  it("400 errors surface as UniclawError(bad_request)", async () => {
-    const client = new UniclawClient({ baseUrl, verifyByDefault: false });
+  it("400 errors surface as BoardProofError(bad_request)", async () => {
+    const client = new BoardProofClient({ baseUrl, verifyByDefault: false });
     let caught: unknown;
     try {
       await client.evaluate({
@@ -237,8 +237,8 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
     expect(err.code).toBe("bad_request");
   });
 
-  it("404 on unknown approval id surfaces as UniclawError(not_found)", async () => {
-    const client = new UniclawClient({ baseUrl, verifyByDefault: false });
+  it("404 on unknown approval id surfaces as BoardProofError(not_found)", async () => {
+    const client = new BoardProofClient({ baseUrl, verifyByDefault: false });
     let caught: unknown;
     try {
       await client.resolveApproval("ab".repeat(32), {
@@ -254,7 +254,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   });
 
   it("end-to-end tool-execution chain: propose → record → verify chain link", async () => {
-    const client = new UniclawClient({ baseUrl });
+    const client = new BoardProofClient({ baseUrl });
     // 1. Mint an Allowed `tool.*` receipt.
     const allowed = await client.evaluate({
       kind: "tool.http_fetch",
@@ -310,7 +310,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   });
 
   it("recordToolExecution against http.fetch (non-tool action) returns 409", async () => {
-    const client = new UniclawClient({ baseUrl, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl, verifyByDefault: false });
     const allowed = await client.evaluate({
       kind: "http.fetch", // not "tool.*"
       target: "https://example.com/conflict",
@@ -332,7 +332,7 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
   });
 
   it("recordToolExecution failure case (error field) verifies cold", async () => {
-    const client = new UniclawClient({ baseUrl });
+    const client = new BoardProofClient({ baseUrl });
     const allowed = await client.evaluate({
       kind: "tool.http_fetch",
       target: "https://api.example.com/fail",
@@ -356,6 +356,6 @@ describe.skipIf(!INTEGRATION)("client ↔ uniclaw-host integration", () => {
 if (!INTEGRATION) {
   // eslint-disable-next-line no-console
   console.log(
-    "[skip] @uniclaw/client integration tests — set UNICLAW_INTEGRATION=1 and build the release binary to run them.",
+    "[skip] @boardproof/client integration tests — set BOARDPROOF_INTEGRATION=1 and build the release binary to run them.",
   );
 }

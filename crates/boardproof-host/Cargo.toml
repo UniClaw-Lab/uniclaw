@@ -1,0 +1,57 @@
+[package]
+name = "boardproof-host"
+description = "Public-URL receipt hosting for BoardProof — serves boardproof://receipt/<hash> over HTTP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+boardproof-store.workspace = true
+boardproof-store-sqlite.workspace = true
+# Step 21 (HTTP proposal API). Used by `boardproof_host::api` when the
+# server is run with `--constitution`. The kernel mints receipts in
+# response to `POST /v1/proposals` and `POST /v1/approvals/...`;
+# the read-only routes (step 9) don't touch these.
+boardproof-kernel.workspace = true
+boardproof-constitution.workspace = true
+boardproof-approval.workspace = true
+ed25519-dalek.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true
+# Step 20 (end-to-end demo) example deps. The example wires the
+# whole stack — kernel + constitution + tools + secrets + redactor
+# — into one runnable artifact. The first four are also production
+# deps (above) since step 21; the last five remain dev-only.
+boardproof-tools.workspace = true
+boardproof-tools-http.workspace = true
+boardproof-secrets.workspace = true
+boardproof-redact.workspace = true
+base64.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "boardproof-host"
+path = "src/bin/boardproof-host.rs"
+
+[[example]]
+name = "end-to-end-demo"
+path = "examples/end-to-end-demo.rs"

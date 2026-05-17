@@ -1,4 +1,4 @@
-// Unit tests for `UniclawClient` with a mocked fetch. Cover the
+// Unit tests for `BoardProofClient` with a mocked fetch. Cover the
 // request shape (snake_case wire / camelCase API), the response
 // parsing, the discriminated union, the pending callback flow, and
 // the error mapping.
@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { UniclawClient, UniclawError } from "../src/index.js";
+import { BoardProofClient, BoardProofError } from "../src/index.js";
 
 // A fake `fetch` we can program per-test. Vitest's `vi.fn()` makes
 // the call log inspectable.
@@ -109,12 +109,12 @@ const APPROVED_RESP = {
   schema_version: 2,
 };
 
-describe("UniclawClient.evaluate — wire shape", () => {
+describe("BoardProofClient.evaluate — wire shape", () => {
   it("posts to /v1/proposals with snake_case body", async () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -140,7 +140,7 @@ describe("UniclawClient.evaluate — wire shape", () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     const d = await client.evaluate({
       kind: "http.fetch",
       target: "x",
@@ -159,7 +159,7 @@ describe("UniclawClient.evaluate — wire shape", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: `${BASE}////`,
       fetch,
       verifyByDefault: false,
@@ -169,12 +169,12 @@ describe("UniclawClient.evaluate — wire shape", () => {
   });
 });
 
-describe("UniclawClient.evaluate — decision variants", () => {
+describe("BoardProofClient.evaluate — decision variants", () => {
   it("maps denied", async () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({ body: DENIED_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     const d = await client.evaluate({ kind: "shell.exec", target: "rm", inputHash: "00".repeat(32) });
     expect(d.kind).toBe("denied");
   });
@@ -186,7 +186,7 @@ describe("UniclawClient.evaluate — decision variants", () => {
         body: APPROVED_RESP,
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     const d = await client.evaluate({
       kind: "http.fetch",
       target: "/admin/x",
@@ -210,7 +210,7 @@ describe("UniclawClient.evaluate — decision variants", () => {
         body: { ...DENIED_RESP, content_id: "f".repeat(64) },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     const d = await client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) });
     if (d.kind !== "pending") throw new Error("narrowing");
     const denied = await d.deny("operator@example.com");
@@ -227,43 +227,43 @@ describe("UniclawClient.evaluate — decision variants", () => {
         body: { ...ALLOWED_RESP, decision: "weird" },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) }),
     ).rejects.toThrow(/unknown decision/);
   });
 });
 
-describe("UniclawClient — error mapping", () => {
-  it("400 → UniclawError(bad_request)", async () => {
+describe("BoardProofClient — error mapping", () => {
+  it("400 → BoardProofError(bad_request)", async () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({
         status: 400,
         body: { error: "bad_request", detail: "action.input_hash: not hex" },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     let caught: unknown;
     try {
       await client.evaluate({ kind: "x", target: "y", inputHash: "bogus" });
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeInstanceOf(UniclawError);
-    const err = caught as UniclawError;
+    expect(caught).toBeInstanceOf(BoardProofError);
+    const err = caught as BoardProofError;
     expect(err.status).toBe(400);
     expect(err.code).toBe("bad_request");
     expect(err.detail).toContain("input_hash");
   });
 
-  it("404 → UniclawError(not_found)", async () => {
+  it("404 → BoardProofError(not_found)", async () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/approvals/${"f".repeat(64)}/resolve`]: () => ({
         status: 404,
         body: { error: "not_found", detail: "no receipt with content_id ..." },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.resolveApproval("f".repeat(64), {
         principal: "x",
@@ -272,14 +272,14 @@ describe("UniclawClient — error mapping", () => {
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
   });
 
-  it("409 → UniclawError(conflict)", async () => {
+  it("409 → BoardProofError(conflict)", async () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/approvals/${"a".repeat(64)}/resolve`]: () => ({
         status: 409,
         body: { error: "conflict", detail: "not pending" },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.resolveApproval("a".repeat(64), {
         principal: "x",
@@ -288,20 +288,20 @@ describe("UniclawClient — error mapping", () => {
     ).rejects.toMatchObject({ status: 409, code: "conflict" });
   });
 
-  it("500 with non-JSON body → UniclawError(non_json_response)", async () => {
+  it("500 with non-JSON body → BoardProofError(non_json_response)", async () => {
     const fetch: typeof globalThis.fetch = async () =>
       new Response("oops", {
         status: 500,
         headers: { "content-type": "text/plain" },
       });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) }),
     ).rejects.toMatchObject({ status: 500, code: "non_json_response" });
   });
 });
 
-describe("UniclawClient — verify-by-default", () => {
+describe("BoardProofClient — verify-by-default", () => {
   // We can't run the real verifier inline here without a real
   // receipt + key. The integration test covers the happy path with
   // a live binary. Here we just confirm the default value applies
@@ -332,7 +332,7 @@ describe("UniclawClient — verify-by-default", () => {
       }
       throw new Error(`unexpected url ${url} (init=${JSON.stringify(init)})`);
     };
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -354,7 +354,7 @@ describe("UniclawClient — verify-by-default", () => {
       }
       throw new Error(`unexpected url ${url}`);
     };
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: true,
@@ -367,14 +367,14 @@ describe("UniclawClient — verify-by-default", () => {
   });
 });
 
-describe("UniclawClient.resolveApproval — direct path", () => {
+describe("BoardProofClient.resolveApproval — direct path", () => {
   it("can be called without a PendingDecision", async () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/approvals/${"d".repeat(64)}/resolve`]: () => ({
         body: APPROVED_RESP,
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     const d = await client.resolveApproval("d".repeat(64), {
       principal: "operator@example.com",
       outcome: "approved",
@@ -391,7 +391,7 @@ describe("UniclawClient.resolveApproval — direct path", () => {
         body: { ...PENDING_RESP, content_id: "d".repeat(64) },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.resolveApproval("d".repeat(64), {
         principal: "x",
@@ -401,7 +401,7 @@ describe("UniclawClient.resolveApproval — direct path", () => {
   });
 });
 
-describe("UniclawClient.recordToolExecution — wire shape", () => {
+describe("BoardProofClient.recordToolExecution — wire shape", () => {
   const ALLOWED_ID = "f".repeat(64);
   const TE_RESP = {
     decision: "allowed",
@@ -416,7 +416,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     const r = await client.recordToolExecution({
       allowedReceiptId: ALLOWED_ID,
       outputHash: "11".repeat(32),
@@ -433,7 +433,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await client.recordToolExecution({
       allowedReceiptId: ALLOWED_ID,
       outputHash: "11".repeat(32),
@@ -450,7 +450,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await client.recordToolExecution({
       allowedReceiptId: ALLOWED_ID,
       outputHash: "11".repeat(32),
@@ -468,7 +468,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await client.recordToolExecution({
       allowedReceiptId: ALLOWED_ID,
       outputHash: "11".repeat(32),
@@ -493,7 +493,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/tool-executions`]: () => ({ body: TE_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await client.recordToolExecution({
       allowedReceiptId: ALLOWED_ID,
       error: "connection refused",
@@ -514,7 +514,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
         },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.recordToolExecution({ allowedReceiptId: ALLOWED_ID }),
     ).rejects.toMatchObject({ status: 400, code: "bad_request" });
@@ -527,7 +527,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
         body: { error: "not_found", detail: "no receipt with content_id ..." },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.recordToolExecution({
         allowedReceiptId: ALLOWED_ID,
@@ -546,7 +546,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
         },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.recordToolExecution({
         allowedReceiptId: ALLOWED_ID,
@@ -561,7 +561,7 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
         body: { ...TE_RESP, decision: "denied" },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.recordToolExecution({
         allowedReceiptId: ALLOWED_ID,
@@ -571,33 +571,33 @@ describe("UniclawClient.recordToolExecution — wire shape", () => {
   });
 });
 
-describe("UniclawClient.getReceipt", () => {
+describe("BoardProofClient.getReceipt", () => {
   it("GETs /receipts/<hash> and returns parsed JSON", async () => {
     const expectedReceipt = { version: 1, body: { foo: "bar" } };
     const { fetch, calls } = makeFetchMock({
       [`GET ${BASE}/receipts/${"a".repeat(64)}`]: () => ({ body: expectedReceipt }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     const r = await client.getReceipt("a".repeat(64));
     expect(r).toEqual(expectedReceipt);
     expect(calls[0]!.method).toBe("GET");
   });
 
-  it("throws UniclawError on 404", async () => {
+  it("throws BoardProofError on 404", async () => {
     const { fetch } = makeFetchMock({
       [`GET ${BASE}/receipts/${"a".repeat(64)}`]: () => ({
         status: 404,
         body: { error: "receipt_not_found", hash: "..." },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(client.getReceipt("a".repeat(64))).rejects.toMatchObject({
       status: 404,
     });
   });
 });
 
-describe("UniclawClient — bearer-token auth (step 25)", () => {
+describe("BoardProofClient — bearer-token auth (step 25)", () => {
   const TOKEN = "a5".repeat(32);
   const RECEIPT_BODY = {
     version: 1,
@@ -612,7 +612,7 @@ describe("UniclawClient — bearer-token auth (step 25)", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -629,7 +629,7 @@ describe("UniclawClient — bearer-token auth (step 25)", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/approvals/${id}/resolve`]: () => ({ body: APPROVED_RESP }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -651,7 +651,7 @@ describe("UniclawClient — bearer-token auth (step 25)", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/tool-executions`]: () => ({ body: teResp }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -669,7 +669,7 @@ describe("UniclawClient — bearer-token auth (step 25)", () => {
     const { fetch, calls } = makeFetchMock({
       [`GET ${BASE}/receipts/${hash}`]: () => ({ body: RECEIPT_BODY }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -686,7 +686,7 @@ describe("UniclawClient — bearer-token auth (step 25)", () => {
     const { fetch, calls } = makeFetchMock({
       [`GET ${url}`]: () => ({ body: RECEIPT_BODY }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -703,34 +703,34 @@ describe("UniclawClient — bearer-token auth (step 25)", () => {
     const { fetch, calls } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) });
     expect(calls[0]!.headers["authorization"]).toBeUndefined();
     expect(calls[0]!.headers["content-type"]).toBe("application/json");
   });
 
-  it("surfaces 401 from server as UniclawError(status=401, code='unauthorized')", async () => {
+  it("surfaces 401 from server as BoardProofError(status=401, code='unauthorized')", async () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({
         status: 401,
         body: { error: "unauthorized", detail: "missing Authorization header" },
       }),
     });
-    const client = new UniclawClient({ baseUrl: BASE, fetch, verifyByDefault: false });
+    const client = new BoardProofClient({ baseUrl: BASE, fetch, verifyByDefault: false });
     await expect(
       client.evaluate({ kind: "x", target: "y", inputHash: "00".repeat(32) }),
     ).rejects.toMatchObject({ status: 401, code: "unauthorized" });
   });
 });
 
-describe("UniclawClient — key_id surface (step 19a)", () => {
+describe("BoardProofClient — key_id surface (step 19a)", () => {
   it("surfaces keyId on the Decision when server returns it", async () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({
         body: { ...ALLOWED_RESP, key_id: "prod-2026" },
       }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -748,7 +748,7 @@ describe("UniclawClient — key_id surface (step 19a)", () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/proposals`]: () => ({ body: ALLOWED_RESP }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -769,7 +769,7 @@ describe("UniclawClient — key_id surface (step 19a)", () => {
         body: { ...APPROVED_RESP, key_id: "hsm-3" },
       }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,
@@ -795,7 +795,7 @@ describe("UniclawClient — key_id surface (step 19a)", () => {
     const { fetch } = makeFetchMock({
       [`POST ${BASE}/v1/tool-executions`]: () => ({ body: teResp }),
     });
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl: BASE,
       fetch,
       verifyByDefault: false,

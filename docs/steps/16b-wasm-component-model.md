@@ -2,8 +2,8 @@
 
 > **Phase:** 3 — Tools and Secrets
 > **PR:** _this PR_
-> **Crates touched:** `uniclaw-tools-wasm`
-> **New artefact:** `crates/uniclaw-tools-wasm/wit/tool.wit` + a Rust→WASM Component test fixture
+> **Crates touched:** `boardproof-tools-wasm`
+> **New artefact:** `crates/boardproof-tools-wasm/wit/tool.wit` + a Rust→WASM Component test fixture
 
 ## What is this step?
 
@@ -16,7 +16,7 @@ Both paths coexist:
 
 Internally, `WasmTool` keeps a `WasmKind { Core(Module), Component(Component) }` enum and `Tool::call` dispatches on it. The two arms share engine config, fuel/epoch setup, the memory limiter, and the per-call `Store<StoreData>` factory — only the calling convention differs.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 ```
                  Caller
@@ -71,7 +71,7 @@ The canonical ABI handles memory ownership in both directions. The guest sees Ru
 
 ### 2. "How do I evolve the surface without breaking existing tools?"
 
-The WIT package `uniclaw:tool@0.1.0` is versioned. Future-step additions (host imports for I/O, capability checks, secret broker bridges) are additive: a new world `tool-with-host` can land alongside the existing `tool` world without breaking anything that uses the v0 surface.
+The WIT package `boardproof:tool@0.1.0` is versioned. Future-step additions (host imports for I/O, capability checks, secret broker bridges) are additive: a new world `tool-with-host` can land alongside the existing `tool` world without breaking anything that uses the v0 surface.
 
 This is exactly the lever we'll pull in 16c — adding host imports without forcing every existing tool to recompile.
 
@@ -82,8 +82,8 @@ Component Model is language-agnostic. The same `wit/tool.wit` describes the surf
 ## How does it work in plain words?
 
 ```rust
-use uniclaw_tools_wasm::{WasmConfig, WasmTool};
-use uniclaw_tools::{ApprovalPolicy, Tool, ToolManifest};
+use boardproof_tools_wasm::{WasmConfig, WasmTool};
+use boardproof_tools::{ApprovalPolicy, Tool, ToolManifest};
 
 // 1. Build a tool from Component Model bytes (~46 KB of compiled
 //    Rust→WASM Component for the test fixture).
@@ -106,7 +106,7 @@ let out = tool.call(&call)?;
 The v0 WIT is deliberately minimal:
 
 ```wit
-package uniclaw:tool@0.1.0;
+package boardproof:tool@0.1.0;
 
 interface tool-api {
     call: func(input: list<u8>) -> result<list<u8>, string>;
@@ -117,7 +117,7 @@ world tool {
 }
 ```
 
-Raw `list<u8>` mirrors the host-side `ToolCall.input: Vec<u8>` + `ToolOutput.bytes: Vec<u8>` already in `uniclaw-tools`. Tools that want JSON encode it themselves rather than baking an envelope into the ABI.
+Raw `list<u8>` mirrors the host-side `ToolCall.input: Vec<u8>` + `ToolOutput.bytes: Vec<u8>` already in `boardproof-tools`. Tools that want JSON encode it themselves rather than baking an envelope into the ABI.
 
 ## Why this design choice and not another?
 
@@ -126,15 +126,15 @@ Raw `list<u8>` mirrors the host-side `ToolCall.input: Vec<u8>` + `ToolOutput.byt
 - **Why pull `wasmtime-wasi` into the dep tree?** A Rust→WASM Component built against `wasm32-wasip2` automatically declares WASI imports — even if the program never touches them — because `std` does. Without WASI imports satisfied on the host, instantiation fails. We register an *empty* WASI context per call (no preopens, no env, no stdio passthrough), which makes the imports linkable without granting any real capability. Step 16c will replace the empty context with the kind of capability-checked one that actually matters; for 16b the goal is just "instantiation succeeds." Going `no_std` to strip the imports is on the future-step list, blocked on `wit-bindgen-rt`'s std dependency.
 - **Why per-call linker construction (`add_to_linker_sync` every call)?** Same fresh-state guarantee as 16a: each call gets its own Store + its own linker + its own WASI context, so nothing leaks across calls. Future optimisation: build a `ComponentLinker` once at construction time and reuse via `InstancePre`. Premature for v0 — measure first, optimise later (and it's not on the trait surface, so the optimisation is purely internal).
 - **Why a committed `.wasm` fixture rather than building at test time?** CI runners don't ship `wasm32-wasip2` or `cargo-component`. Pulling those in would inflate CI runtime by orders of magnitude. The committed artefact is reproducible from the source in `tests/fixtures/echo-component/` plus the documented build command (`BUILD.md` next to the source). Reviewers can rebuild locally; CI loads the bytes as-is.
-- **Why mirror the WIT into the fixture's own `wit/` directory instead of pointing at `crates/uniclaw-tools-wasm/wit/tool.wit`?** `cargo-component` resolves the WIT package relative to the fixture crate's directory. Pointing across workspace boundaries is awkward (different toolchain, different target dir). A copy is cheap; the BUILD.md notes that both must stay in sync.
+- **Why mirror the WIT into the fixture's own `wit/` directory instead of pointing at `crates/boardproof-tools-wasm/wit/tool.wit`?** `cargo-component` resolves the WIT package relative to the fixture crate's directory. Pointing across workspace boundaries is awkward (different toolchain, different target dir). A copy is cheap; the BUILD.md notes that both must stay in sync.
 
 ## Adopt-don't-copy
 
-- **`IronClaw`'s `near:agent@0.3.0` WIT package design** — the patterns we adopted: a single `tool` interface as the export contract, a separate world definition that imports/exports interfaces, the explicit "guest is untrusted, host satisfies imports under capability" trust model. Uniclaw's v0 surface is leaner (raw bytes, no `schema()`/`description()` exports — those live on the host-side `ToolManifest`). The richer pattern is on the future-step list.
+- **`IronClaw`'s `near:agent@0.3.0` WIT package design** — the patterns we adopted: a single `tool` interface as the export contract, a separate world definition that imports/exports interfaces, the explicit "guest is untrusted, host satisfies imports under capability" trust model. BoardProof's v0 surface is leaner (raw bytes, no `schema()`/`description()` exports — those live on the host-side `ToolManifest`). The richer pattern is on the future-step list.
 - **`IronClaw`'s `bindgen!` invocation pattern** (`crates/ironclaw_wasm/src/bindings.rs`) — adopted as the shape of our `src/bindings.rs`. Same macro, same world-name argument, same module-level allows for the generator's lints.
 - **`IronClaw`'s `StoreData` shape** — adopted as a single struct holding `MemoryLimiter` + `WasiCtx` + `ResourceTable` + the `WasiView` impl. Same pattern, smaller surface (no IronClaw-specific host functions or resource-usage tracking yet).
 
-Citations live in `crates/uniclaw-tools-wasm/src/lib.rs` and `wit/tool.wit`.
+Citations live in `crates/boardproof-tools-wasm/src/lib.rs` and `wit/tool.wit`.
 
 ## What you can do with this step today
 

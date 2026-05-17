@@ -1,6 +1,6 @@
 # Security Policy
 
-Uniclaw's whole product thesis is *the kernel proves what it did*. Security
+BoardProof's whole product thesis is *the kernel proves what it did*. Security
 issues against the kernel, the receipt format, the Constitution engine, the
 capability budget algebra, the secret broker, the sandbox, or the verifier
 binary are taken extremely seriously.
@@ -12,7 +12,7 @@ binary are taken extremely seriously.
 Instead, report via one of:
 
 - GitHub Security Advisories: open a private advisory on the repository.
-- Email: `security@uniclaw.dev` (PGP key fingerprint will be published with
+- Email: `security@boardproof.dev` (PGP key fingerprint will be published with
   the first signed release).
 
 Please include:
@@ -36,8 +36,8 @@ Please include:
 
 In scope:
 
-- Kernel (`uniclaw-kernel`).
-- Receipt format and verifier (`uniclaw-receipt`, `uniclaw-verify`).
+- Kernel (`boardproof-kernel`).
+- Receipt format and verifier (`boardproof-receipt`, `boardproof-verify`).
 - Policy DSL, Constitution engine, capability leases, audit chain, provenance
   graph (when these crates exist).
 - Secret broker, sandbox, redaction pipeline.
@@ -46,11 +46,11 @@ In scope:
 Out of scope:
 
 - Issues that depend on a malicious operator who already has admin privileges
-  on the host running Uniclaw.
+  on the host running BoardProof.
 - Denial-of-service via legitimate but expensive operations
   (rate-limit your agents).
 - Findings against third-party WASM tools or skills that are not bundled with
-  Uniclaw.
+  BoardProof.
 - Issues in the upstream `wasmtime`, `automerge-rs`, or other dependencies
   that we do not maintain (please report to the upstream project, then notify
   us so we can coordinate updates).

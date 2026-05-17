@@ -1,11 +1,11 @@
-// Receipt shape mirrors `crates/uniclaw-receipt/src/lib.rs`:
+// Receipt shape mirrors `crates/boardproof-receipt/src/lib.rs`:
 //   pub struct Receipt    { version, body, issuer, signature }
 //   pub struct ReceiptBody { schema_version, issued_at, action,
 //                            decision, constitution_rules, provenance,
 //                            redactor_stack_hash, merkle_leaf }
 //
 // The TypeScript types here are *receive-only* — the package never
-// constructs receipts, only verifies what a Uniclaw kernel produced.
+// constructs receipts, only verifies what a BoardProof kernel produced.
 // Fields are kept loose (no enum unions for `decision`, no `unknown`
 // for `action.target`) so future schema additions don't reject in
 // the type checker before they reach the canonicalizer.

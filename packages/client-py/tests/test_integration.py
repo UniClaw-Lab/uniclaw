@@ -1,14 +1,14 @@
-"""Integration test for ``uniclaw_client``. Spawns a real
-``uniclaw-host`` subprocess in proposal-API mode, drives the client
+"""Integration test for ``boardproof_client``. Spawns a real
+``boardproof-host`` subprocess in proposal-API mode, drives the client
 through every decision flow, and asserts that the minted receipts
 verify cold.
 
-**Off by default.** Without ``UNICLAW_INTEGRATION=1``, the suite
+**Off by default.** Without ``BOARDPROOF_INTEGRATION=1``, the suite
 skips. This keeps ``pytest`` working in environments where the Rust
 toolchain isn't available.
 
 The release binary must already exist at
-``target/release/uniclaw-host``. We don't run ``cargo build`` from
+``target/release/boardproof-host``. We don't run ``cargo build`` from
 here — that's the developer's job, and CI does it explicitly.
 """
 
@@ -23,25 +23,25 @@ from typing import Iterator
 
 import pytest
 
-from uniclaw_client import (
+from boardproof_client import (
     Action,
     Redaction,
     RuleMatch,
-    UniclawClient,
-    UniclawError,
-    UniclawVerifyError,
+    BoardProofClient,
+    BoardProofError,
+    BoardProofVerifyError,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-HOST_BIN = REPO_ROOT / "target" / "release" / "uniclaw-host"
+HOST_BIN = REPO_ROOT / "target" / "release" / "boardproof-host"
 FIXTURE = Path(__file__).parent / "fixtures" / "test-constitution.toml"
 SEED_HEX = "2a" * 32
 
-INTEGRATION = os.environ.get("UNICLAW_INTEGRATION") == "1"
+INTEGRATION = os.environ.get("BOARDPROOF_INTEGRATION") == "1"
 
 pytestmark = pytest.mark.skipif(
     not INTEGRATION,
-    reason="set UNICLAW_INTEGRATION=1 and build the release binary to run integration tests",
+    reason="set BOARDPROOF_INTEGRATION=1 and build the release binary to run integration tests",
 )
 
 
@@ -50,7 +50,7 @@ def host_url() -> Iterator[str]:
     if not HOST_BIN.exists():
         pytest.skip(
             f"release binary missing at {HOST_BIN}; "
-            f"run `cargo build --release --bin uniclaw-host -p uniclaw-host`",
+            f"run `cargo build --release --bin boardproof-host -p boardproof-host`",
         )
     # Step 25: binary refuses proposal mode without explicit
     # auth choice. These tests don't exercise auth themselves
@@ -81,7 +81,7 @@ def host_url() -> Iterator[str]:
             if not line:
                 if proc.poll() is not None:
                     pytest.fail(
-                        f"uniclaw-host exited early with code {proc.returncode}: {buf}",
+                        f"boardproof-host exited early with code {proc.returncode}: {buf}",
                     )
                 time.sleep(0.05)
                 continue
@@ -91,7 +91,7 @@ def host_url() -> Iterator[str]:
                 url = m.group(1)
                 break
         if url is None:
-            pytest.fail(f"uniclaw-host did not bind within 10s; stderr so far: {buf}")
+            pytest.fail(f"boardproof-host did not bind within 10s; stderr so far: {buf}")
         yield url
     finally:
         proc.send_signal(2)  # SIGINT
@@ -102,7 +102,7 @@ def host_url() -> Iterator[str]:
 
 
 def test_evaluate_allowed_verifies_cold(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url)
+    c = BoardProofClient(base_url=host_url)
     d = c.evaluate(Action(kind="http.fetch", target="https://example.com/data", input_hash="00" * 32))
     assert d.kind == "allowed"
     assert d.receipt_url.startswith(host_url)
@@ -112,13 +112,13 @@ def test_evaluate_allowed_verifies_cold(host_url: str) -> None:
 
 
 def test_evaluate_denied(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url)
+    c = BoardProofClient(base_url=host_url)
     d = c.evaluate(Action(kind="shell.exec", target="rm -rf /", input_hash="00" * 32))
     assert d.kind == "denied"
 
 
 def test_pending_to_approved_chain_links(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url)
+    c = BoardProofClient(base_url=host_url)
     pending = c.evaluate(Action(
         kind="http.fetch",
         target="https://example.com/admin/secrets",
@@ -141,7 +141,7 @@ def test_pending_to_approved_chain_links(host_url: str) -> None:
 
 
 def test_pending_to_denied(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url)
+    c = BoardProofClient(base_url=host_url)
     pending = c.evaluate(Action(
         kind="http.fetch",
         target="https://example.com/admin/other",
@@ -153,7 +153,7 @@ def test_pending_to_denied(host_url: str) -> None:
 
 
 def test_record_tool_execution_full_chain(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url)
+    c = BoardProofClient(base_url=host_url)
     allowed = c.evaluate(Action(
         kind="tool.http_fetch",
         target="https://api.example.com/data",
@@ -192,7 +192,7 @@ def test_record_tool_execution_full_chain(host_url: str) -> None:
 
 
 def test_record_tool_execution_failure_path(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url)
+    c = BoardProofClient(base_url=host_url)
     allowed = c.evaluate(Action(
         kind="tool.http_fetch",
         target="https://api.example.com/fail",
@@ -211,14 +211,14 @@ def test_record_tool_execution_failure_path(host_url: str) -> None:
 
 
 def test_record_tool_execution_409_on_non_tool_action(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url, verify_by_default=False)
+    c = BoardProofClient(base_url=host_url, verify_by_default=False)
     allowed = c.evaluate(Action(
         kind="http.fetch",  # not tool.*
         target="https://example.com/conflict",
         input_hash="11" * 32,
     ))
     assert allowed.kind == "allowed"
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         c.record_tool_execution(
             allowed_receipt_id=allowed.content_id,
             output_hash="22" * 32,
@@ -234,7 +234,7 @@ def test_verify_by_default_catches_tampered_receipt(host_url: str) -> None:
     import urllib.request
     from unittest.mock import patch
 
-    c = UniclawClient(base_url=host_url, verify_by_default=False)
+    c = BoardProofClient(base_url=host_url, verify_by_default=False)
     real = c.evaluate(Action(
         kind="http.fetch",
         target="https://example.com/tamper",
@@ -271,8 +271,8 @@ def test_verify_by_default_catches_tampered_receipt(host_url: str) -> None:
         return result
 
     with patch("urllib.request.urlopen", side_effect=tampering_urlopen):
-        evil = UniclawClient(base_url=host_url, verify_by_default=True)
-        with pytest.raises(UniclawVerifyError):
+        evil = BoardProofClient(base_url=host_url, verify_by_default=True)
+        with pytest.raises(BoardProofVerifyError):
             evil.evaluate(Action(
                 kind="http.fetch",
                 target="https://example.com/tamper-trip",
@@ -281,16 +281,16 @@ def test_verify_by_default_catches_tampered_receipt(host_url: str) -> None:
 
 
 def test_400_error_surfaces(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url, verify_by_default=False)
-    with pytest.raises(UniclawError) as exc:
+    c = BoardProofClient(base_url=host_url, verify_by_default=False)
+    with pytest.raises(BoardProofError) as exc:
         c.evaluate(Action(kind="http.fetch", target="x", input_hash="not-hex"))
     assert exc.value.status == 400
     assert exc.value.code == "bad_request"
 
 
 def test_404_on_unknown_approval(host_url: str) -> None:
-    c = UniclawClient(base_url=host_url, verify_by_default=False)
-    with pytest.raises(UniclawError) as exc:
+    c = BoardProofClient(base_url=host_url, verify_by_default=False)
+    with pytest.raises(BoardProofError) as exc:
         c.resolve_approval("ab" * 32, principal="ops", outcome="approved")
     assert exc.value.status == 404
     assert exc.value.code == "not_found"

@@ -1,5 +1,5 @@
 // Unit tests for the JCS canonicalizer. Mirrors the Rust unit
-// tests in `crates/uniclaw-receipt/src/canonical.rs`.
+// tests in `crates/boardproof-receipt/src/canonical.rs`.
 
 import { describe, expect, it } from "vitest";
 import { canonicalizeJcs } from "../src/canonical.js";

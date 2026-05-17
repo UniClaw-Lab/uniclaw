@@ -194,6 +194,210 @@ dependencies = [
 ]
 
 [[package]]
+name = "boardproof-approval"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "boardproof-budget"
+version = "0.0.1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "boardproof-constitution"
+version = "0.0.1"
+dependencies = [
+ "boardproof-receipt",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "boardproof-explain"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "boardproof-budget",
+ "boardproof-receipt",
+ "clap",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "boardproof-host"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "blake3",
+ "boardproof-approval",
+ "boardproof-constitution",
+ "boardproof-kernel",
+ "boardproof-receipt",
+ "boardproof-redact",
+ "boardproof-secrets",
+ "boardproof-store",
+ "boardproof-store-sqlite",
+ "boardproof-tools",
+ "boardproof-tools-http",
+ "clap",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
+]
+
+[[package]]
+name = "boardproof-kernel"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "boardproof-approval",
+ "boardproof-budget",
+ "boardproof-constitution",
+ "boardproof-receipt",
+ "boardproof-sleep",
+ "boardproof-store",
+ "boardproof-tools",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "boardproof-receipt"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "boardproof-redact"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "boardproof-receipt",
+ "regex",
+]
+
+[[package]]
+name = "boardproof-router"
+version = "0.0.1"
+dependencies = [
+ "boardproof-approval",
+ "boardproof-constitution",
+ "boardproof-explain",
+ "boardproof-kernel",
+ "boardproof-receipt",
+ "ed25519-dalek",
+]
+
+[[package]]
+name = "boardproof-secrets"
+version = "0.0.1"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
+name = "boardproof-sleep"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "boardproof-receipt",
+ "boardproof-store",
+ "ed25519-dalek",
+ "serde_json",
+]
+
+[[package]]
+name = "boardproof-store"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "boardproof-receipt",
+ "ed25519-dalek",
+ "serde_json",
+]
+
+[[package]]
+name = "boardproof-store-sqlite"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "boardproof-receipt",
+ "boardproof-store",
+ "ed25519-dalek",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "boardproof-tools"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "boardproof-receipt",
+]
+
+[[package]]
+name = "boardproof-tools-http"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "blake3",
+ "boardproof-receipt",
+ "boardproof-secrets",
+ "boardproof-tools",
+ "serde",
+ "serde_json",
+ "ureq",
+ "url",
+]
+
+[[package]]
+name = "boardproof-tools-wasm"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "blake3",
+ "boardproof-receipt",
+ "boardproof-secrets",
+ "boardproof-tools",
+ "boardproof-tools-http",
+ "serde",
+ "serde_json",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wat",
+]
+
+[[package]]
+name = "boardproof-verify"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "boardproof-receipt",
+ "clap",
+ "ed25519-dalek",
+ "serde_json",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2236,210 +2440,6 @@ name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
-
-[[package]]
-name = "uniclaw-approval"
-version = "0.0.1"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "uniclaw-budget"
-version = "0.0.1"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "uniclaw-constitution"
-version = "0.0.1"
-dependencies = [
- "serde",
- "toml",
- "uniclaw-receipt",
-]
-
-[[package]]
-name = "uniclaw-explain"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "ed25519-dalek",
- "serde",
- "serde_json",
- "uniclaw-budget",
- "uniclaw-receipt",
-]
-
-[[package]]
-name = "uniclaw-host"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "axum",
- "base64",
- "blake3",
- "clap",
- "ed25519-dalek",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tower-http",
- "uniclaw-approval",
- "uniclaw-constitution",
- "uniclaw-kernel",
- "uniclaw-receipt",
- "uniclaw-redact",
- "uniclaw-secrets",
- "uniclaw-store",
- "uniclaw-store-sqlite",
- "uniclaw-tools",
- "uniclaw-tools-http",
-]
-
-[[package]]
-name = "uniclaw-kernel"
-version = "0.0.1"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "serde",
- "serde_json",
- "uniclaw-approval",
- "uniclaw-budget",
- "uniclaw-constitution",
- "uniclaw-receipt",
- "uniclaw-sleep",
- "uniclaw-store",
- "uniclaw-tools",
-]
-
-[[package]]
-name = "uniclaw-receipt"
-version = "0.0.1"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "uniclaw-redact"
-version = "0.0.1"
-dependencies = [
- "blake3",
- "regex",
- "uniclaw-receipt",
-]
-
-[[package]]
-name = "uniclaw-router"
-version = "0.0.1"
-dependencies = [
- "ed25519-dalek",
- "uniclaw-approval",
- "uniclaw-constitution",
- "uniclaw-explain",
- "uniclaw-kernel",
- "uniclaw-receipt",
-]
-
-[[package]]
-name = "uniclaw-secrets"
-version = "0.0.1"
-dependencies = [
- "zeroize",
-]
-
-[[package]]
-name = "uniclaw-sleep"
-version = "0.0.1"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "serde_json",
- "uniclaw-receipt",
- "uniclaw-store",
-]
-
-[[package]]
-name = "uniclaw-store"
-version = "0.0.1"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "serde_json",
- "uniclaw-receipt",
-]
-
-[[package]]
-name = "uniclaw-store-sqlite"
-version = "0.0.1"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "rusqlite",
- "serde_json",
- "tempfile",
- "uniclaw-receipt",
- "uniclaw-store",
-]
-
-[[package]]
-name = "uniclaw-tools"
-version = "0.0.1"
-dependencies = [
- "blake3",
- "uniclaw-receipt",
-]
-
-[[package]]
-name = "uniclaw-tools-http"
-version = "0.0.1"
-dependencies = [
- "base64",
- "blake3",
- "serde",
- "serde_json",
- "uniclaw-receipt",
- "uniclaw-secrets",
- "uniclaw-tools",
- "ureq",
- "url",
-]
-
-[[package]]
-name = "uniclaw-tools-wasm"
-version = "0.0.1"
-dependencies = [
- "base64",
- "blake3",
- "serde",
- "serde_json",
- "uniclaw-receipt",
- "uniclaw-secrets",
- "uniclaw-tools",
- "uniclaw-tools-http",
- "wasmtime",
- "wasmtime-wasi",
- "wat",
-]
-
-[[package]]
-name = "uniclaw-verify"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "ed25519-dalek",
- "serde_json",
- "uniclaw-receipt",
-]
 
 [[package]]
 name = "unicode-ident"

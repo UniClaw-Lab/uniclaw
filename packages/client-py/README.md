@@ -1,19 +1,19 @@
-# `uniclaw-client` (Python)
+# `boardproof-client` (Python)
 
-Python client + verifier for [Uniclaw](https://github.com/UniClaw-Lab/uniclaw) receipts. The on-ramp for any Python-based runtime — NemoClaw bridges, compliance tooling, custom agents — that wants to anchor agent actions into Uniclaw receipts.
+Python client + verifier for [BoardProof](https://github.com/UniClaw-Lab/boardproof) receipts. The on-ramp for any Python-based runtime — NemoClaw bridges, compliance tooling, custom agents — that wants to anchor agent actions into BoardProof receipts.
 
 One class, four operations, verify-by-default. Python 3.10+.
 
 ## Why this exists
 
-Step 22 shipped the TypeScript client. This Python sibling closes threshold 1 of the deep-strategy thresholds: **a Python developer can `pip install` a verifier + client and validate a Uniclaw receipt minted on a Rust kernel — bytes match, on any platform**.
+Step 22 shipped the TypeScript client. This Python sibling closes threshold 1 of the deep-strategy thresholds: **a Python developer can `pip install` a verifier + client and validate a BoardProof receipt minted on a Rust kernel — bytes match, on any platform**.
 
 Python is also the de-facto language for compliance tooling (SOC 2, HIPAA, EU AI Act) and the host language for NemoClaw. This package opens both adoption paths directly.
 
 ## Install
 
 ```bash
-pip install uniclaw-client
+pip install boardproof-client
 ```
 
 Two production dependencies, both with audited security history and precompiled wheels for major platforms:
@@ -26,9 +26,9 @@ No HTTP client dependency — the package uses the standard-library `urllib.requ
 ## Usage
 
 ```python
-from uniclaw_client import UniclawClient, Action
+from boardproof_client import BoardProofClient, Action
 
-client = UniclawClient(base_url="http://127.0.0.1:8787")
+client = BoardProofClient(base_url="http://127.0.0.1:8787")
 
 decision = client.evaluate(Action(
     kind="http.fetch",
@@ -54,7 +54,7 @@ The `decision` is a discriminated union; match on `.kind` and Python's pattern m
 ### Tool execution (step 23)
 
 ```python
-from uniclaw_client import Redaction, RuleMatch
+from boardproof_client import Redaction, RuleMatch
 
 exec_d = client.record_tool_execution(
     allowed_receipt_id=decision.content_id,
@@ -73,7 +73,7 @@ exec_d = client.record_tool_execution(
 ### Standalone verifier
 
 ```python
-from uniclaw_client import verify_receipt_url
+from boardproof_client import verify_receipt_url
 
 result = verify_receipt_url("http://localhost:8787/receipts/abc...")
 if result.ok:
@@ -84,25 +84,25 @@ else:
 
 ## Verify-by-default
 
-Every mint is verified locally before being returned. If the recomputed signature doesn't validate, `UniclawVerifyError` is raised:
+Every mint is verified locally before being returned. If the recomputed signature doesn't validate, `BoardProofVerifyError` is raised:
 
 ```python
-from uniclaw_client import UniclawVerifyError
+from boardproof_client import BoardProofVerifyError
 
 try:
     client.evaluate(...)
-except UniclawVerifyError as e:
+except BoardProofVerifyError as e:
     print("server returned a tampered receipt:", e.detail)
 ```
 
-Override per-call with `verify=False` or globally with `UniclawClient(base_url, verify_by_default=False)`.
+Override per-call with `verify=False` or globally with `BoardProofClient(base_url, verify_by_default=False)`.
 
 The verify path runs entirely in-process: JCS canonicalize → BLAKE3 → Ed25519. On the bench machine, that's ~2 ms total — fast enough to be the default. See `bench-results/24-python-client.txt`.
 
 ## API surface
 
 ```python
-class UniclawClient:
+class BoardProofClient:
     def __init__(self, base_url: str, *, verify_by_default: bool = True, timeout: float = 10.0): ...
 
     def evaluate(self, action: Action, *, verify: bool | None = None) -> Decision: ...
@@ -119,18 +119,18 @@ class UniclawClient:
     def get_receipt(self, content_id: str) -> dict[str, Any]: ...
 ```
 
-Errors: `UniclawError` (HTTP status + code + detail) and `UniclawVerifyError` (content_id + detail).
+Errors: `BoardProofError` (HTTP status + code + detail) and `BoardProofVerifyError` (content_id + detail).
 
 ## Trust model
 
 - **Verify locally.** No HTTP request asks the server whether a receipt is valid; everything happens in the caller's process.
 - **Re-verify the content_id too.** The recomputed BLAKE3 hash is compared against the server's claimed `content_id`. If they differ, the server lied about what it returned.
-- **No authentication in the wire format** (yet). The Uniclaw `--constitution` mode is unauthenticated; expose only on loopback / a trusted segment. A future Uniclaw release adds bearer-token auth; this client will pick it up via a custom `urlopen` wrapper.
+- **No authentication in the wire format** (yet). The BoardProof `--constitution` mode is unauthenticated; expose only on loopback / a trusted segment. A future BoardProof release adds bearer-token auth; this client will pick it up via a custom `urlopen` wrapper.
 
 ## Pairs with
 
-- **`uniclaw-host --constitution …`** — the Rust sidecar binary. Build with `cargo build --release --bin uniclaw-host -p uniclaw-host` and run next to your Python process.
-- **`@uniclaw/verifier`** + **`@uniclaw/client`** — the TypeScript siblings. Same wire format, same conformance fixture.
+- **`boardproof-host --constitution …`** — the Rust sidecar binary. Build with `cargo build --release --bin boardproof-host -p boardproof-host` and run next to your Python process.
+- **`@boardproof/verifier`** + **`@boardproof/client`** — the TypeScript siblings. Same wire format, same conformance fixture.
 
 ## Testing
 
@@ -140,14 +140,14 @@ pip install -e .[dev]
 # Unit tests (mocked urlopen) + conformance against canonical-v2.json:
 python -m pytest
 
-# Integration tests against a live uniclaw-host (opt-in):
-cargo build --release --bin uniclaw-host -p uniclaw-host
-UNICLAW_INTEGRATION=1 python -m pytest
+# Integration tests against a live boardproof-host (opt-in):
+cargo build --release --bin boardproof-host -p boardproof-host
+BOARDPROOF_INTEGRATION=1 python -m pytest
 
 # Type-check:
-python -m mypy src/uniclaw_client
+python -m mypy src/boardproof_client
 ```
 
 ## License
 
-MIT OR Apache-2.0, matching the Uniclaw monorepo.
+MIT OR Apache-2.0, matching the BoardProof monorepo.
