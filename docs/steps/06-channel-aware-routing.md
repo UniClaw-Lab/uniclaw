@@ -2,7 +2,7 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #5
-> **Crate introduced:** `uniclaw-router`
+> **Crate introduced:** `boardproof-router`
 
 ## What is this step?
 
@@ -10,7 +10,7 @@ This step builds the **delivery layer** for approval prompts. When the kernel mi
 
 In v0, only a CLI router ships. You run it in a terminal; when an action needs approval, the prompt shows up in your terminal; you type `approve` or `deny`. Future routers (Slack, email, mobile push) plug in through the same trait.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The approval router sits **between** the kernel and the human. It is not part of the kernel itself — the kernel is happy to mint Pending receipts forever; it has no opinion about who answers them. The router takes the Pending receipt, presents it to the operator on whatever channel makes sense, and brings back the answer.
 

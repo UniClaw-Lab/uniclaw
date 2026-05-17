@@ -2,14 +2,14 @@
 
 > **Phase:** 3 — Tools and Secrets
 > **PR:** _this PR_
-> **Crate introduced:** `uniclaw-redact`
-> **Crates updated:** `uniclaw-receipt` (audit-data types), `uniclaw-kernel` (RecordToolExecution wiring)
+> **Crate introduced:** `boardproof-redact`
+> **Crates updated:** `boardproof-receipt` (audit-data types), `boardproof-kernel` (RecordToolExecution wiring)
 
 ## What is this step?
 
 Tools return bytes. Those bytes might contain a credential — the OAuth token an API echoed back, the bearer header a misbehaving service logged, the `Authorization:` line a debug endpoint included for "convenience." Without sanitization, those bytes go into the receipt's output, get hashed, and become part of the audit trail forever. Even worse, the bytes might also flow back to the LLM that called the tool — and the LLM might quote them in its next response, where they go into another receipt, where they get archived again.
 
-Step 18 closes that gap. A new `uniclaw-redact` crate runs operator-configured pattern matching over tool-output bytes BEFORE the kernel hashes them, replacing matches with `[REDACTED:<rule-id>]` placeholders. The kernel records what happened: the post-redaction hash becomes the receipt's `output_hash`, one `redaction_applied` provenance edge fires per rule that matched, and `ReceiptBody::redactor_stack_hash` (a placeholder field since RFC-0001) finally has a real producer.
+Step 18 closes that gap. A new `boardproof-redact` crate runs operator-configured pattern matching over tool-output bytes BEFORE the kernel hashes them, replacing matches with `[REDACTED:<rule-id>]` placeholders. The kernel records what happened: the post-redaction hash becomes the receipt's `output_hash`, one `redaction_applied` provenance edge fires per rule that matched, and `ReceiptBody::redactor_stack_hash` (a placeholder field since RFC-0001) finally has a real producer.
 
 Three properties matter:
 
@@ -17,9 +17,9 @@ Three properties matter:
 2. **The receipt commits to *which* redactor stack ran.** `redactor_stack_hash` is a stable hash over the ordered list of redactor IDs. Two stacks with different IDs produce different hashes; auditors can verify "stack X ran on this output" by checking the stack's hash against the operator's published config.
 3. **The audit edges name what fired.** One `redaction_applied` provenance edge per matching rule, with `to = "redaction:<rule_id>:count=<n>"`. Auditors querying "which receipts redacted GitHub PATs?" run a structural query.
 
-This is the audit primitive the war-analysis positioning has been waiting for. After step 18, Uniclaw can answer the question "what was redacted, by which rules, and when" with the same receipt-format guarantees it gives every other action.
+This is the audit primitive the war-analysis positioning has been waiting for. After step 18, BoardProof can answer the question "what was redacted, by which rules, and when" with the same receipt-format guarantees it gives every other action.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The redaction pipeline lives **between the tool layer and the kernel** in the existing `RecordToolExecution` flow:
 
@@ -36,7 +36,7 @@ The redaction pipeline lives **between the tool layer and the kernel** in the ex
                               │
                               ▼
                        ┌──────────────────────┐
-                       │  uniclaw-redact      │  ◀── new in 18
+                       │  boardproof-redact      │  ◀── new in 18
                        │  RedactorStack::redact(bytes)
                        │       │
                        │       ▼
@@ -86,8 +86,8 @@ For v0, the hash commits to the *ID list*, not the rule patterns inside each red
 
 ```rust
 use std::sync::Arc;
-use uniclaw_redact::{PatternRedactor, RedactorStack, Redactor};
-use uniclaw_kernel::{KernelEvent, ToolExecution};
+use boardproof_redact::{PatternRedactor, RedactorStack, Redactor};
+use boardproof_kernel::{KernelEvent, ToolExecution};
 
 // 1. Operator configures their redactor stack at startup.
 let stack = RedactorStack::new(
@@ -130,7 +130,7 @@ The flow before step 18 is unchanged for callers who don't pass a `redaction` �
 ## Why this design choice and not another?
 
 - **Why run the redactor *outside* the kernel?** The kernel is `no_std` and has no `regex` dependency. Pulling a regex engine into the kernel would be a big architectural change for a feature that doesn't need kernel-side state. The redactor runs in the caller's process with full `std`; the kernel records the outcome.
-- **Why a `RedactionReport` audit-data type in `uniclaw-receipt`?** That's the `no_std`-friendly home for kernel-shaped types. The `Redactor` *trait* and its impls live in `uniclaw-redact` (`std`); the *data* the kernel reads lives in `uniclaw-receipt`. Same split as `ToolMetadata` (data in `uniclaw-tools`, kernel reads it).
+- **Why a `RedactionReport` audit-data type in `boardproof-receipt`?** That's the `no_std`-friendly home for kernel-shaped types. The `Redactor` *trait* and its impls live in `boardproof-redact` (`std`); the *data* the kernel reads lives in `boardproof-receipt`. Same split as `ToolMetadata` (data in `boardproof-tools`, kernel reads it).
 - **Why pattern-based, not value-based?** Value-based scanning (search for the literal value of every registered secret) would require the kernel — or the redactor process — to fetch every secret value at receipt-mint time and have them all in memory simultaneously. That's a much bigger trust + memory surface. Pattern-based redaction handles the realistic credential-leak case (an API echoes a token); secret-value scanning is a future-step add-on.
 - **Why include zero-count rule matches in `RedactionReport.matches` but skip emitting edges for them in the kernel?** The redactor returns what it ran (transparent reporting). The kernel emits provenance for what *fired* (audit signal). Zero-count entries say "this rule ran but matched nothing" — useful for the redactor's debug output but noise in the receipt. The kernel filters.
 - **Why `BLAKE3(stack_id + redactor_ids)` for `stack_hash` instead of including the rule patterns?** Two trade-offs collapsed into one decision: (a) including rule patterns ties the hash to the exact regex syntax, which is brittle when patterns are updated for performance/coverage; (b) excluding them lets operators commit at the level of "stack X" via the operator's published config. For v0 the looser commitment is the right default; tighter commitments wait for the Phase-6 policy-receipt class.
@@ -140,7 +140,7 @@ The flow before step 18 is unchanged for callers who don't pass a `redaction` �
 
 - **`IronClaw`'s `crates/ironclaw_safety/` redaction discipline** — adopted in *philosophy*: "scan output for known secret patterns, redact, sign the result before the audit chain commits." Their pattern corpus informed our default-rule list (we cover the common shapes — GitHub, OpenAI, Anthropic, Slack, AWS, JWT, generic Bearer); their richer features (structured-leak detection, PII redaction, output sanitisation across logging stacks) are on the future-step list when use cases demand them. No source borrowed.
 
-Citation lives in `crates/uniclaw-redact/src/lib.rs`.
+Citation lives in `crates/boardproof-redact/src/lib.rs`.
 
 ## What you can do with this step today
 
@@ -161,7 +161,7 @@ Throughput is well into the "fast enough to run on every tool output" range. A 1
 
 ## What this step does **not** ship
 
-- **Secret-value scanning.** v0 only matches *patterns*. A future step could tie into `uniclaw-secrets` to scan for the literal values of currently-registered secrets — risky because it requires the redactor to handle live secret material; defer until 18b.
+- **Secret-value scanning.** v0 only matches *patterns*. A future step could tie into `boardproof-secrets` to scan for the literal values of currently-registered secrets — risky because it requires the redactor to handle live secret material; defer until 18b.
 - **Structural / JSON-path redaction.** Regex-only for v0; structural redaction would need deserialization and a path DSL. Future step.
 - **`$kernel/policy/redactor` receipt class** for "operator configured stack X at time T." The operator's stack hash is committed to via `redactor_stack_hash`, but there's no separate receipt that anchors the operator's chosen config in the audit chain. Phase 6 governance.
 - **Per-output redactor selection.** The kernel takes whatever `redaction` the caller passes. Routing decisions (e.g. "use strict redactor for filesystem outputs, lax redactor for hashes") live in the caller's wiring. Future step could surface a `Capability::RedactorChoice` if a use case demands kernel-side routing.
@@ -169,4 +169,4 @@ Throughput is well into the "fast enough to run on every tool output" range. A 1
 
 ## In summary
 
-Step 18 closes the loop on Uniclaw's "redaction proof" claim from aspirational to demonstrated. The kernel's audit chain now commits to the post-redaction form of every tool output (when redaction was applied), records *which* rules fired with structural provenance edges, and pins *which* redactor stack ran via the long-placeholder `redactor_stack_hash` field. Phase 3's wedge is now complete: capability + SSRF + secrets + WASM (core / Component / with-host) + redaction + verifiable receipts for every action. Phase 3's next decision is whether to ship step 17 (container fallback) as an optional plugin or move directly to Phase 4 (federated memory) since the trust story is unambiguous.
+Step 18 closes the loop on BoardProof's "redaction proof" claim from aspirational to demonstrated. The kernel's audit chain now commits to the post-redaction form of every tool output (when redaction was applied), records *which* rules fired with structural provenance edges, and pins *which* redactor stack ran via the long-placeholder `redactor_stack_hash` field. Phase 3's wedge is now complete: capability + SSRF + secrets + WASM (core / Component / with-host) + redaction + verifiable receipts for every action. Phase 3's next decision is whether to ship step 17 (container fallback) as an optional plugin or move directly to Phase 4 (federated memory) since the trust story is unambiguous.

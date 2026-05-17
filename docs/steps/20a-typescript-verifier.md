@@ -7,20 +7,20 @@
 
 ## What is this step?
 
-Step 19 made receipt bytes deterministic across languages (RFC 8785 JCS). Step 20 made the wedge **visible** by shipping a single-command demo that produces 6 verifiable receipt URLs. Step 20a closes the last threshold-1 gap: **a TypeScript developer can `npm install` a verifier and validate a Uniclaw receipt minted on a Rust kernel, with bytes matching, on any platform that runs Node 20+ or a modern browser.**
+Step 19 made receipt bytes deterministic across languages (RFC 8785 JCS). Step 20 made the wedge **visible** by shipping a single-command demo that produces 6 verifiable receipt URLs. Step 20a closes the last threshold-1 gap: **a TypeScript developer can `npm install` a verifier and validate a BoardProof receipt minted on a Rust kernel, with bytes matching, on any platform that runs Node 20+ or a modern browser.**
 
 That's it. One sentence, one package, one shipped artifact. After this PR, the success-threshold-1 test from the deep-strategy memory is literally true: hand any of step 20's printed URLs to anyone with `npm`, and they run
 
 ```bash
-npx uniclaw-verify-ts http://localhost:PORT/receipts/HASH
+npx boardproof-verify-ts http://localhost:PORT/receipts/HASH
 # ✓ verified | issuer=197f6b23... decision=allowed schema_v=2 content_id=a957e6e6...
 ```
 
-— no Rust toolchain, no Uniclaw clone, no trust in the host.
+— no Rust toolchain, no BoardProof clone, no trust in the host.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
-The package is a sibling to `uniclaw-verify` (the Rust CLI) and `verify.html` (the browser page). Three implementations of the same verification algorithm, kept honest by sharing a single conformance fixture:
+The package is a sibling to `boardproof-verify` (the Rust CLI) and `verify.html` (the browser page). Three implementations of the same verification algorithm, kept honest by sharing a single conformance fixture:
 
 ```
                   ┌──────────────────────────────┐
@@ -32,8 +32,8 @@ The package is a sibling to `uniclaw-verify` (the Rust CLI) and `verify.html` (t
               ┌────────────────────┼──────────────────────┐
               ▼                    ▼                      ▼
     ┌─────────────────┐  ┌───────────────────┐  ┌────────────────────┐
-    │ Rust            │  │ verify.html       │  │ @uniclaw/verifier  │
-    │ uniclaw-receipt │  │ (inlined JS port) │  │ (npm, this PR)     │
+    │ Rust            │  │ verify.html       │  │ @boardproof/verifier  │
+    │ boardproof-receipt │  │ (inlined JS port) │  │ (npm, this PR)     │
     │ canonical.rs    │  │                   │  │ src/canonical.ts   │
     └─────────────────┘  └───────────────────┘  └────────────────────┘
               │                    │                      │
@@ -48,9 +48,9 @@ If any one diverges, the conformance vectors fail in that implementation and the
 
 Three problems.
 
-### 1. "I want to verify a Uniclaw receipt from Node / Deno / Bun / a browser, without installing Rust."
+### 1. "I want to verify a BoardProof receipt from Node / Deno / Bun / a browser, without installing Rust."
 
-Before this step, the only published verifier was `uniclaw-verify` (a ~720 KB Rust binary) or `verify.html` (a static HTML page). Neither is a programmatic API. A Node service that wants to *act on* the verified-or-not result — log it to an audit DB, fail a CI step, gate a downstream call — had no clean way to do it.
+Before this step, the only published verifier was `boardproof-verify` (a ~720 KB Rust binary) or `verify.html` (a static HTML page). Neither is a programmatic API. A Node service that wants to *act on* the verified-or-not result — log it to an audit DB, fail a CI step, gate a downstream call — had no clean way to do it.
 
 The npm package exports:
 
@@ -72,7 +72,7 @@ The package's tests load the SAME `canonical-v2.json` fixture the Rust snapshot 
 // tests/conformance.test.ts
 const fixturePath = resolve(
   here,
-  "../../../crates/uniclaw-receipt/tests/vectors/canonical-v2.json",
+  "../../../crates/boardproof-receipt/tests/vectors/canonical-v2.json",
 );
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
 
@@ -124,13 +124,13 @@ Failures populate `error: string` and set `ok: false` — no exceptions thrown f
 
 - **Verify a demo receipt in Node:**
   ```bash
-  cargo run --release --example end-to-end-demo -p uniclaw-host
+  cargo run --release --example end-to-end-demo -p boardproof-host
   # ...copy one of the printed URLs...
-  npx uniclaw-verify-ts http://127.0.0.1:PORT/receipts/HASH
+  npx boardproof-verify-ts http://127.0.0.1:PORT/receipts/HASH
   ```
 - **Use it in a CI step:**
   ```ts
-  import { verifyReceiptUrl } from "@uniclaw/verifier";
+  import { verifyReceiptUrl } from "@boardproof/verifier";
   const r = await verifyReceiptUrl(process.env.RECEIPT_URL);
   if (!r.ok) { console.error(r.error); process.exit(1); }
   ```
@@ -149,12 +149,12 @@ Failures populate `error: string` and set `ok: false` — no exceptions thrown f
 
 - The JCS algorithm is RFC 8785; no source borrowed from any reference implementation. The TS port mirrors the Rust port (which mirrors the spec).
 - `@noble/curves` and `@noble/hashes` are external dependencies, not vendored. We use their public APIs only. They are widely deployed in TypeScript security tooling (Ethereum, Solana, Bitcoin client libraries); they are appropriate for a verifier package.
-- Other claw verifiers were not consulted (OpenClaw / NemoClaw / etc. don't ship verifier packages — the verifier-as-protocol is Uniclaw's lane per the war analysis).
+- Other claw verifiers were not consulted (OpenClaw / NemoClaw / etc. don't ship verifier packages — the verifier-as-protocol is BoardProof's lane per the war analysis).
 
 ## What this step does **not** ship
 
 - **A bundled `verify.html` that imports from the package.** Keeping `verify.html` self-contained is a feature (save it offline, verify any receipt anywhere). The two implementations are kept in lockstep by the shared conformance fixture, not by code sharing. A future PR could introduce a build step that injects the package's bundled JS into the HTML; that's a refactor, not new functionality.
-- **An `npm publish`.** Publishing is an operations task — credentials, release process, semver discipline. The PR ships the package code, tests, README, and proves it works end-to-end. Publishing it to npm under `@uniclaw/verifier` is one command (`npm publish --access=public`) once the namespace is reserved.
+- **An `npm publish`.** Publishing is an operations task — credentials, release process, semver discipline. The PR ships the package code, tests, README, and proves it works end-to-end. Publishing it to npm under `@boardproof/verifier` is one command (`npm publish --access=public`) once the namespace is reserved.
 - **Other languages.** Go, Python, Swift verifiers are separate future steps (each conforms to the same `canonical-v2.json` fixture).
 - **CI integration.** The conformance smoke (`conformance-smoke.mjs`) and the vitest suite are run manually. A future step wires both into GitHub Actions on PRs touching `canonical.rs`, `verify.html`, or `packages/verifier-ts/`.
 - **A `key_id` field.** Schema-additive; queued as step 19a. The TS package's `Receipt` type uses index signatures (`[k: string]: unknown`) on each shape so future schema fields don't break older verifiers at compile time.

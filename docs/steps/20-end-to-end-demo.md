@@ -2,8 +2,8 @@
 
 > **Phase:** 3.5 — Receipt-format hardening + adoption-foundations
 > **PR:** _this PR_
-> **Crates touched:** `uniclaw-host` (new example file + dev-deps)
-> **New artefact:** `crates/uniclaw-host/examples/end-to-end-demo.rs`
+> **Crates touched:** `boardproof-host` (new example file + dev-deps)
+> **New artefact:** `crates/boardproof-host/examples/end-to-end-demo.rs`
 
 ## What is this step?
 
@@ -12,14 +12,14 @@ Phase 3 shipped every piece of the wedge: kernel + constitution + budget + appro
 The demo closes that gap. One command:
 
 ```bash
-cargo run --release --example end-to-end-demo -p uniclaw-host
+cargo run --release --example end-to-end-demo -p boardproof-host
 ```
 
 Walks 5 representative actions, prints 6 verifiable receipt URLs, spins up the browser verifier at `/verify`. A security engineer who has never read the code can run this, paste any printed URL, and watch the trust property work.
 
-This is the war analysis's *"Uniclaw spearpoint"*: *"the demo should be brutally concrete: agent proposes risky action → constitution requires approval → user approves → tool executes → secret used through broker without exposing raw material → output redacted → receipt chain published → third party verifies it from another machine."* All seven steps in one binary.
+This is the war analysis's *"BoardProof spearpoint"*: *"the demo should be brutally concrete: agent proposes risky action → constitution requires approval → user approves → tool executes → secret used through broker without exposing raw material → output redacted → receipt chain published → third party verifies it from another machine."* All seven steps in one binary.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The demo doesn't add a new component. It WIRES the existing components into one runnable artifact:
 
@@ -34,29 +34,29 @@ The demo doesn't add a new component. It WIRES the existing components into one 
                                         │
         ┌─────────────────────┬─────────┼──────────┬──────────────────┐
         ▼                     ▼         ▼          ▼                  ▼
-   uniclaw-kernel    uniclaw-constitution   uniclaw-tools-http   uniclaw-redact
+   boardproof-kernel    boardproof-constitution   boardproof-tools-http   boardproof-redact
    (signs receipts)  (TOML rule engine)     (HttpFetchTool)      (PatternRedactor)
         │                     │              │                       │
         │                     │              ▼                       │
-        │                     │       uniclaw-secrets                │
+        │                     │       boardproof-secrets                │
         │                     │       (SecretBroker)                 │
         │                     │              │                       │
         ▼                     ▼              ▼                       ▼
         │            ┌────────────────────────────────────────────┐  │
-        └─────────►  │  uniclaw-store::InMemoryReceiptLog         │ ◄┘
+        └─────────►  │  boardproof-store::InMemoryReceiptLog         │ ◄┘
                      │  (chain-validated, issuer-pinned)          │
                      └─────────────────────┬──────────────────────┘
                                            │
                                            ▼
                           ┌────────────────────────────────────────┐
-                          │  uniclaw-host (axum)                   │
+                          │  boardproof-host (axum)                   │
                           │  /receipts/<hash>                      │
                           │  /verify  (browser verifier with JCS)  │
                           └────────────────────────────────────────┘
                                            │
                                            ▼
                                   Any browser, anywhere.
-                                  Cold-verify with no Uniclaw install.
+                                  Cold-verify with no BoardProof install.
 ```
 
 A built-in mock HTTP server (~50 LOC) plays the role of the external API the agent talks to. No real network calls, no flakiness from external services, deterministic enough to compare across runs.
@@ -65,7 +65,7 @@ A built-in mock HTTP server (~50 LOC) plays the role of the external API the age
 
 Three problems.
 
-### 1. "I want to evaluate Uniclaw — show me what it does."
+### 1. "I want to evaluate BoardProof — show me what it does."
 
 Before this step, the answer was *"read the docs and the master plan."* Now it's *"run this command."* Every prospective integrator (OpenClaw maintainer, ZeroClaw maintainer, IronClaw architect, security engineer at an enterprise) gets the wedge in 30 seconds.
 
@@ -80,7 +80,7 @@ The demo prints both the receipt URL AND the issuer public key. The user pastes 
 3. Recomputes the BLAKE3 content_id — checks it matches the URL.
 4. Verifies the Ed25519 signature against the embedded issuer public key — using `crypto.subtle.verify` in the browser, NOT a server round-trip.
 
-If the user wanted to be paranoid, they'd save `/verify` offline, kill the demo, and verify the saved receipt JSON against the saved verifier page. The signature still verifies because Uniclaw's trust model puts everything that matters into the receipt itself.
+If the user wanted to be paranoid, they'd save `/verify` offline, kill the demo, and verify the saved receipt JSON against the saved verifier page. The signature still verifies because BoardProof's trust model puts everything that matters into the receipt itself.
 
 ### 3. "What does each receipt class look like in the wild?"
 
@@ -129,7 +129,7 @@ Notable details:
 
 ## What you can do with this step today
 
-- **Run it.** `cargo run --release --example end-to-end-demo -p uniclaw-host`. It prints 6 URLs and waits for Ctrl+C.
+- **Run it.** `cargo run --release --example end-to-end-demo -p boardproof-host`. It prints 6 URLs and waits for Ctrl+C.
 - **Verify a receipt.** Open `/verify` in any browser. Paste a URL. The page reconstructs canonical bytes, verifies the signature, displays the result.
 - **Tamper test.** Edit a receipt's JSON (change one field, change a hex digit in `leaf_hash`). Paste the tampered version into `/verify`. The signature breaks. That's the trust property in action.
 - **Inspect the chain.** Each receipt's `body.merkle_leaf.prev_hash` is the previous receipt's `leaf_hash`. Walk the chain from receipt 6 backward and confirm each link.
@@ -138,12 +138,12 @@ Notable details:
 Future-step extensions (out of scope here):
 
 - A **WASM-tool action** as a 7th demo step. Adds the WASM Component path to the storyline.
-- A **TypeScript verifier package** and a Node script that does the same `/verify` flow programmatically. Pairs with the demo: publish demo URL, anyone can `npm install @uniclaw/verifier` and verify.
-- A **hosted instance** at a public URL (e.g. `demo.uniclaw.dev`) that runs the demo continuously. Removes the need to install Rust.
+- A **TypeScript verifier package** and a Node script that does the same `/verify` flow programmatically. Pairs with the demo: publish demo URL, anyone can `npm install @boardproof/verifier` and verify.
+- A **hosted instance** at a public URL (e.g. `demo.boardproof.dev`) that runs the demo continuously. Removes the need to install Rust.
 
 ## Adopt-don't-copy
 
-No source borrowed. The demo's structure is informed by what an auditor/security engineer wants to see (per the war analysis), not by any other claw's existing demo. The mock HTTP server pattern matches the one in `crates/uniclaw-tools-http/tests/integration.rs` (which we wrote ourselves — see step 14).
+No source borrowed. The demo's structure is informed by what an auditor/security engineer wants to see (per the war analysis), not by any other claw's existing demo. The mock HTTP server pattern matches the one in `crates/boardproof-tools-http/tests/integration.rs` (which we wrote ourselves — see step 14).
 
 ## What this step does **not** ship
 
@@ -164,7 +164,7 @@ No bench file for this step — it's a demo, not a perf-sensitive component.
 
 ## In summary
 
-Step 20 turns Uniclaw from "an interesting Rust workspace" into "an artifact a stranger can run and verify." Phase 3 + step 19 produced the receipt as a portable trust artifact; step 20 is the public *demonstration* that the trust artifact actually works end to end. Three success thresholds from the deep-strategy memory:
+Step 20 turns BoardProof from "an interesting Rust workspace" into "an artifact a stranger can run and verify." Phase 3 + step 19 produced the receipt as a portable trust artifact; step 20 is the public *demonstration* that the trust artifact actually works end to end. Three success thresholds from the deep-strategy memory:
 
 - ✅ Threshold 1 (portability) — half-done from step 19; this PR doesn't change.
 - ✅ **Threshold 2 (visibility) — closed by this PR.** A third party can run the demo, get URLs, paste them into the browser verifier, see the wedge work cold.

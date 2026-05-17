@@ -1,0 +1,19 @@
+[package]
+name = "boardproof-secrets"
+description = "Secret broker for BoardProof — opaque SecretValue + trait surface for backend brokers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 {
-  "name": "@uniclaw/client",
+  "name": "@boardproof/client",
   "version": "0.1.0",
-  "description": "TypeScript client for Uniclaw's HTTP proposal API. Wraps POST /v1/proposals + POST /v1/approvals/{id}/resolve with verify-by-default (re-uses @uniclaw/verifier). Browser + Node 20+. The on-ramp for any non-Rust runtime that wants to anchor agent actions into Uniclaw receipts.",
+  "description": "TypeScript client for BoardProof's HTTP proposal API. Wraps POST /v1/proposals + POST /v1/approvals/{id}/resolve with verify-by-default (re-uses @boardproof/verifier). Browser + Node 20+. The on-ramp for any non-Rust runtime that wants to anchor agent actions into BoardProof receipts.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,7 +28,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@uniclaw/verifier": "^0.1.0"
+    "@boardproof/verifier": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
@@ -39,7 +39,7 @@
     "node": ">=20"
   },
   "keywords": [
-    "uniclaw",
+    "boardproof",
     "receipt",
     "client",
     "adapter",
@@ -49,9 +49,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/UniClaw-Lab/uniclaw.git",
+    "url": "git+https://github.com/UniClaw-Lab/boardproof.git",
     "directory": "packages/client-ts"
   },
   "license": "(MIT OR Apache-2.0)",
-  "homepage": "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/client-ts"
+  "homepage": "https://github.com/UniClaw-Lab/boardproof/tree/main/packages/client-ts"
 }

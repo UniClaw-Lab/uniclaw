@@ -1,5 +1,5 @@
 """Integration test for step 25 (bearer-token auth). Spawns
-``uniclaw-host`` with ``--bearer-token-hex <token>`` and verifies:
+``boardproof-host`` with ``--bearer-token-hex <token>`` and verifies:
 
 - Without ``bearer_token`` on the client, /v1 calls return 401.
 - With the WRONG ``bearer_token``, /v1 calls return 401.
@@ -7,8 +7,8 @@
 - Read-only routes (``GET /receipts/<hash>`` / ``verify_receipt_url``)
   stay public.
 
-Opt-in via ``UNICLAW_INTEGRATION=1``. The release binary at
-``target/release/uniclaw-host`` must exist.
+Opt-in via ``BOARDPROOF_INTEGRATION=1``. The release binary at
+``target/release/boardproof-host`` must exist.
 """
 
 from __future__ import annotations
@@ -22,21 +22,21 @@ from typing import Iterator
 
 import pytest
 
-from uniclaw_client import Action, UniclawClient, UniclawError
+from boardproof_client import Action, BoardProofClient, BoardProofError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-HOST_BIN = REPO_ROOT / "target" / "release" / "uniclaw-host"
+HOST_BIN = REPO_ROOT / "target" / "release" / "boardproof-host"
 FIXTURE = Path(__file__).parent / "fixtures" / "test-constitution.toml"
 SEED_HEX = "2a" * 32
 # Distinct token for this suite so it doesn't collide with the TS
 # auth fixture's token.
 TOKEN_HEX = "c3" * 32
 
-INTEGRATION = os.environ.get("UNICLAW_INTEGRATION") == "1"
+INTEGRATION = os.environ.get("BOARDPROOF_INTEGRATION") == "1"
 
 pytestmark = pytest.mark.skipif(
     not INTEGRATION,
-    reason="set UNICLAW_INTEGRATION=1 and build the release binary to run integration tests",
+    reason="set BOARDPROOF_INTEGRATION=1 and build the release binary to run integration tests",
 )
 
 
@@ -45,7 +45,7 @@ def authed_host_url() -> Iterator[str]:
     if not HOST_BIN.exists():
         pytest.skip(
             f"release binary missing at {HOST_BIN}; "
-            f"run `cargo build --release --bin uniclaw-host -p uniclaw-host`",
+            f"run `cargo build --release --bin boardproof-host -p boardproof-host`",
         )
     proc = subprocess.Popen(
         [
@@ -73,7 +73,7 @@ def authed_host_url() -> Iterator[str]:
             if not line:
                 if proc.poll() is not None:
                     pytest.fail(
-                        f"uniclaw-host exited early with code {proc.returncode}: {buf}",
+                        f"boardproof-host exited early with code {proc.returncode}: {buf}",
                     )
                 time.sleep(0.05)
                 continue
@@ -83,7 +83,7 @@ def authed_host_url() -> Iterator[str]:
                 url = m.group(1)
                 break
         if url is None:
-            pytest.fail(f"uniclaw-host did not bind within 10s; stderr so far: {buf}")
+            pytest.fail(f"boardproof-host did not bind within 10s; stderr so far: {buf}")
         yield url
     finally:
         proc.send_signal(2)
@@ -94,8 +94,8 @@ def authed_host_url() -> Iterator[str]:
 
 
 def test_evaluate_without_token_returns_401(authed_host_url: str) -> None:
-    client = UniclawClient(base_url=authed_host_url, verify_by_default=False)
-    with pytest.raises(UniclawError) as exc:
+    client = BoardProofClient(base_url=authed_host_url, verify_by_default=False)
+    with pytest.raises(BoardProofError) as exc:
         client.evaluate(Action(
             kind="http.fetch",
             target="https://example.com/no-auth",
@@ -106,12 +106,12 @@ def test_evaluate_without_token_returns_401(authed_host_url: str) -> None:
 
 
 def test_evaluate_with_wrong_token_returns_401(authed_host_url: str) -> None:
-    client = UniclawClient(
+    client = BoardProofClient(
         base_url=authed_host_url,
         verify_by_default=False,
         bearer_token="b6" * 32,  # right length, wrong bytes
     )
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         client.evaluate(Action(
             kind="http.fetch",
             target="https://example.com/wrong-token",
@@ -121,7 +121,7 @@ def test_evaluate_with_wrong_token_returns_401(authed_host_url: str) -> None:
 
 
 def test_evaluate_with_correct_token_succeeds_and_verifies_cold(authed_host_url: str) -> None:
-    client = UniclawClient(base_url=authed_host_url, bearer_token=TOKEN_HEX)
+    client = BoardProofClient(base_url=authed_host_url, bearer_token=TOKEN_HEX)
     d = client.evaluate(Action(
         kind="http.fetch",
         target="https://example.com/with-token",
@@ -132,14 +132,14 @@ def test_evaluate_with_correct_token_succeeds_and_verifies_cold(authed_host_url:
 
 def test_read_only_routes_stay_public(authed_host_url: str) -> None:
     # Mint a receipt with auth, then fetch it without.
-    authed = UniclawClient(base_url=authed_host_url, bearer_token=TOKEN_HEX)
+    authed = BoardProofClient(base_url=authed_host_url, bearer_token=TOKEN_HEX)
     minted = authed.evaluate(Action(
         kind="http.fetch",
         target="https://example.com/public-fetch",
         input_hash="01" * 32,
     ))
     # No token configured on this client.
-    reader = UniclawClient(base_url=authed_host_url, verify_by_default=False)
+    reader = BoardProofClient(base_url=authed_host_url, verify_by_default=False)
     receipt = reader.get_receipt(minted.content_id)
     assert receipt is not None
     result = reader.verify_receipt_url(minted.receipt_url)
@@ -147,7 +147,7 @@ def test_read_only_routes_stay_public(authed_host_url: str) -> None:
 
 
 def test_full_chain_works_with_auth(authed_host_url: str) -> None:
-    client = UniclawClient(base_url=authed_host_url, bearer_token=TOKEN_HEX)
+    client = BoardProofClient(base_url=authed_host_url, bearer_token=TOKEN_HEX)
     allowed = client.evaluate(Action(
         kind="tool.http_fetch",
         target="https://api.example.com/auth-chain",

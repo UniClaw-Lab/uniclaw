@@ -3,3 +3,8 @@ cognitive-complexity-threshold = 25
 type-complexity-threshold = 250
 too-many-arguments-threshold = 6
 too-many-lines-threshold = 200
+
+# Project / brand identifiers that should not require backticking
+# in doc comments. The clippy doc-markdown lint otherwise flags
+# every BoardProof / BoardClaw / SecuClaw mention.
+doc-valid-idents = ["BoardProof", "BoardClaw", "SecuClaw", ".."]

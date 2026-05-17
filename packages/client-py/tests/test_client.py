@@ -1,4 +1,4 @@
-"""Unit tests for ``UniclawClient`` with mocked ``urlopen``. Cover
+"""Unit tests for ``BoardProofClient`` with mocked ``urlopen``. Cover
 the request shape (snake_case wire / Pythonic API), the response
 parsing, the discriminated union, the redaction wire conversion,
 and the error mapping.
@@ -16,12 +16,12 @@ from unittest.mock import patch
 
 import pytest
 
-from uniclaw_client import (
+from boardproof_client import (
     Action,
     Redaction,
     RuleMatch,
-    UniclawClient,
-    UniclawError,
+    BoardProofClient,
+    BoardProofError,
 )
 
 
@@ -140,8 +140,8 @@ def mock_urlopen() -> Iterator[_Recorder]:
         yield rec
 
 
-def client(*, verify_by_default: bool = False) -> UniclawClient:
-    return UniclawClient(base_url=BASE, verify_by_default=verify_by_default)
+def client(*, verify_by_default: bool = False) -> BoardProofClient:
+    return BoardProofClient(base_url=BASE, verify_by_default=verify_by_default)
 
 
 # ---------------------------------------------------------------------
@@ -179,7 +179,7 @@ def test_evaluate_returns_allowed_with_absolute_url(mock_urlopen: _Recorder) -> 
 
 def test_evaluate_strips_trailing_slashes(mock_urlopen: _Recorder) -> None:
     mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {"body": ALLOWED_RESP}
-    c = UniclawClient(base_url=f"{BASE}////", verify_by_default=False)
+    c = BoardProofClient(base_url=f"{BASE}////", verify_by_default=False)
     c.evaluate(Action(kind="x", target="y", input_hash="00" * 32))
     assert mock_urlopen.calls[0]["url"] == f"{BASE}/v1/proposals"
 
@@ -205,7 +205,7 @@ def test_evaluate_unknown_decision_raises(mock_urlopen: _Recorder) -> None:
     mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {
         "body": {**ALLOWED_RESP, "decision": "weird"},
     }
-    with pytest.raises(UniclawError, match="unknown decision"):
+    with pytest.raises(BoardProofError, match="unknown decision"):
         client().evaluate(Action(kind="x", target="y", input_hash="00" * 32))
 
 
@@ -233,7 +233,7 @@ def test_resolve_approval_404(mock_urlopen: _Recorder) -> None:
         "status": 404,
         "body": {"error": "not_found", "detail": "no receipt"},
     }
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         client().resolve_approval(
             "f" * 64, principal="x", outcome="approved",
         )
@@ -246,7 +246,7 @@ def test_resolve_approval_409(mock_urlopen: _Recorder) -> None:
         "status": 409,
         "body": {"error": "conflict", "detail": "not pending"},
     }
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         client().resolve_approval(
             "a" * 64, principal="x", outcome="approved",
         )
@@ -341,7 +341,7 @@ def test_record_tool_execution_surfaces_400(mock_urlopen: _Recorder) -> None:
         "status": 400,
         "body": {"error": "bad_request", "detail": "exactly one of output_hash or error must be set"},
     }
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         client().record_tool_execution(allowed_receipt_id="f" * 64)
     assert exc.value.status == 400
     assert exc.value.code == "bad_request"
@@ -352,7 +352,7 @@ def test_record_tool_execution_surfaces_404(mock_urlopen: _Recorder) -> None:
         "status": 404,
         "body": {"error": "not_found", "detail": "no receipt"},
     }
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         client().record_tool_execution(allowed_receipt_id="f" * 64, output_hash="11" * 32)
     assert exc.value.status == 404
 
@@ -362,7 +362,7 @@ def test_record_tool_execution_surfaces_409(mock_urlopen: _Recorder) -> None:
         "status": 409,
         "body": {"error": "conflict", "detail": "not tool.*"},
     }
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         client().record_tool_execution(allowed_receipt_id="f" * 64, output_hash="11" * 32)
     assert exc.value.status == 409
 
@@ -385,7 +385,7 @@ def test_get_receipt_404_surfaces(mock_urlopen: _Recorder) -> None:
         "status": 404,
         "body": {"error": "receipt_not_found", "detail": "..."},
     }
-    with pytest.raises(UniclawError) as exc:
+    with pytest.raises(BoardProofError) as exc:
         client().get_receipt("a" * 64)
     assert exc.value.status == 404
 
@@ -400,7 +400,7 @@ TOKEN_HEX = "a5" * 32
 
 def test_auth_attaches_bearer_header_on_post_proposals(mock_urlopen: _Recorder) -> None:
     mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {"body": ALLOWED_RESP}
-    c = UniclawClient(
+    c = BoardProofClient(
         base_url=BASE,
         verify_by_default=False,
         bearer_token=TOKEN_HEX,
@@ -413,7 +413,7 @@ def test_auth_attaches_bearer_header_on_post_proposals(mock_urlopen: _Recorder) 
 def test_auth_attaches_bearer_header_on_resolve(mock_urlopen: _Recorder) -> None:
     cid = "d" * 64
     mock_urlopen.handlers[f"POST {BASE}/v1/approvals/{cid}/resolve"] = {"body": APPROVED_RESP}
-    c = UniclawClient(
+    c = BoardProofClient(
         base_url=BASE,
         verify_by_default=False,
         bearer_token=TOKEN_HEX,
@@ -424,7 +424,7 @@ def test_auth_attaches_bearer_header_on_resolve(mock_urlopen: _Recorder) -> None
 
 def test_auth_attaches_bearer_header_on_tool_execution(mock_urlopen: _Recorder) -> None:
     mock_urlopen.handlers[f"POST {BASE}/v1/tool-executions"] = {"body": TOOL_EXEC_RESP}
-    c = UniclawClient(
+    c = BoardProofClient(
         base_url=BASE,
         verify_by_default=False,
         bearer_token=TOKEN_HEX,
@@ -437,7 +437,7 @@ def test_auth_does_not_attach_header_on_get_receipt(mock_urlopen: _Recorder) -> 
     receipt = {"version": 1, "body": {"foo": "bar"}}
     cid = "a" * 64
     mock_urlopen.handlers[f"GET {BASE}/receipts/{cid}"] = {"body": receipt}
-    c = UniclawClient(
+    c = BoardProofClient(
         base_url=BASE,
         verify_by_default=False,
         bearer_token=TOKEN_HEX,
@@ -451,7 +451,7 @@ def test_auth_does_not_attach_header_on_get_receipt(mock_urlopen: _Recorder) -> 
 
 def test_no_token_means_no_authorization_header(mock_urlopen: _Recorder) -> None:
     mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {"body": ALLOWED_RESP}
-    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    c = BoardProofClient(base_url=BASE, verify_by_default=False)
     c.evaluate(Action(kind="x", target="y", input_hash="00" * 32))
     assert "authorization" not in mock_urlopen.calls[0]["headers"]
     assert mock_urlopen.calls[0]["headers"]["content-type"] == "application/json"
@@ -462,8 +462,8 @@ def test_server_401_surfaces_as_unauthorized_error(mock_urlopen: _Recorder) -> N
         "status": 401,
         "body": {"error": "unauthorized", "detail": "missing Authorization header"},
     }
-    c = UniclawClient(base_url=BASE, verify_by_default=False)
-    with pytest.raises(UniclawError) as exc:
+    c = BoardProofClient(base_url=BASE, verify_by_default=False)
+    with pytest.raises(BoardProofError) as exc:
         c.evaluate(Action(kind="x", target="y", input_hash="00" * 32))
     assert exc.value.status == 401
     assert exc.value.code == "unauthorized"
@@ -478,7 +478,7 @@ def test_key_id_surfaces_on_decision_when_present(mock_urlopen: _Recorder) -> No
     mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {
         "body": {**ALLOWED_RESP, "key_id": "prod-2026"},
     }
-    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    c = BoardProofClient(base_url=BASE, verify_by_default=False)
     d = c.evaluate(Action(kind="http.fetch", target="x", input_hash="00" * 32))
     assert d.kind == "allowed"
     assert d.key_id == "prod-2026"
@@ -486,7 +486,7 @@ def test_key_id_surfaces_on_decision_when_present(mock_urlopen: _Recorder) -> No
 
 def test_key_id_is_none_when_server_omits_it(mock_urlopen: _Recorder) -> None:
     mock_urlopen.handlers[f"POST {BASE}/v1/proposals"] = {"body": ALLOWED_RESP}
-    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    c = BoardProofClient(base_url=BASE, verify_by_default=False)
     d = c.evaluate(Action(kind="http.fetch", target="x", input_hash="00" * 32))
     assert d.kind == "allowed"
     assert d.key_id is None
@@ -497,7 +497,7 @@ def test_key_id_threads_through_resolve_approval(mock_urlopen: _Recorder) -> Non
     mock_urlopen.handlers[f"POST {BASE}/v1/approvals/{cid}/resolve"] = {
         "body": {**APPROVED_RESP, "key_id": "hsm-3"},
     }
-    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    c = BoardProofClient(base_url=BASE, verify_by_default=False)
     d = c.resolve_approval(cid, principal="ops", outcome="approved")
     assert d.kind == "approved"
     assert d.key_id == "hsm-3"
@@ -507,7 +507,7 @@ def test_key_id_threads_through_record_tool_execution(mock_urlopen: _Recorder) -
     mock_urlopen.handlers[f"POST {BASE}/v1/tool-executions"] = {
         "body": {**TOOL_EXEC_RESP, "key_id": "prod-2026"},
     }
-    c = UniclawClient(base_url=BASE, verify_by_default=False)
+    c = BoardProofClient(base_url=BASE, verify_by_default=False)
     d = c.record_tool_execution(
         allowed_receipt_id="f" * 64,
         output_hash="11" * 32,

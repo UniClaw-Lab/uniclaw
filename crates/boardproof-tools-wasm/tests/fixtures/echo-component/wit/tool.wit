@@ -1,0 +1,16 @@
+// Mirror of `crates/boardproof-tools-wasm/wit/tool.wit`. cargo-component
+// resolves the WIT package from this directory; keeping a copy here
+// avoids reaching outside the fixture crate's directory tree (which
+// cargo-component handles awkwardly across workspace boundaries).
+//
+// If you change the host WIT, update this copy too.
+
+package boardproof:tool@0.1.0;
+
+interface tool-api {
+    call: func(input: list<u8>) -> result<list<u8>, string>;
+}
+
+world tool {
+    export tool-api;
+}

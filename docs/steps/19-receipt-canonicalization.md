@@ -2,22 +2,22 @@
 
 > **Phase:** 3.5 — Receipt-format hardening (between Phase 3 and Phase 4)
 > **PR:** _this PR_
-> **Crates touched:** `uniclaw-receipt` (canonicalizer module + content_id/sign/verify dispatch), `uniclaw-host` (browser verifier JCS port)
+> **Crates touched:** `boardproof-receipt` (canonicalizer module + content_id/sign/verify dispatch), `boardproof-host` (browser verifier JCS port)
 > **New artefacts:** `tests/vectors/canonical-v2.json` (5 conformance vectors) + `tests/vectors/conformance-smoke.mjs` (Node.js cross-language harness)
 
 ## What is this step?
 
-The war analysis (`/home/uni/Documents/GPT/claw/UNICLAW_CLAW_WAR_ANALYSIS.md`) lists making the receipt format "boringly interoperable" as the **highest-leverage** work for Uniclaw's wedge. Quote:
+The war analysis (`/home/uni/Documents/GPT/claw/UNICLAW_CLAW_WAR_ANALYSIS.md`) lists making the receipt format "boringly interoperable" as the **highest-leverage** work for BoardProof's wedge. Quote:
 
-> "If verification is not universal, Uniclaw stays a Rust project. If verification is universal, Uniclaw becomes a protocol."
+> "If verification is not universal, BoardProof stays a Rust project. If verification is universal, BoardProof becomes a protocol."
 
 Step 19 closes the foundational gap: **adopt RFC 8785 JCS as the canonical encoding for receipt bodies at `schema_version >= 2`.** Today, receipt body bytes are deterministic in Rust (serde_json's default encoder uses struct-declaration field order), but they aren't *canonical* across languages. A TypeScript, Go, or Python verifier reproducing the bytes from a parsed receipt body has to do exactly the same field-order tricks Rust does — fragile.
 
-JCS fixes this permanently. After step 19, every JCS-compliant verifier in any language produces identical bytes for the same logical receipt body. That's the property that turns receipts from "Uniclaw-format" into "portable trust artifact."
+JCS fixes this permanently. After step 19, every JCS-compliant verifier in any language produces identical bytes for the same logical receipt body. That's the property that turns receipts from "BoardProof-format" into "portable trust artifact."
 
 This step is **not** on the master plan's numbered roadmap. The master plan calls Phase 4 (federated memory) next; the war analysis (which I wrote separately, after the master plan's Phase 3 was nearly complete) argues for this hardening sprint first. The case: every Phase 4 receipt type lands on the receipt format. If we add memory-sync receipts with a non-canonical encoding, every memory-receipt-issuing system has to migrate when canonicalization eventually lands. Doing canonicalization first means Phase 4 builds on a stable wire format other languages can already verify.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The receipt format is the trust artifact every other layer eventually crosses. Step 19 hardens it:
 
@@ -30,7 +30,7 @@ The receipt format is the trust artifact every other layer eventually crosses. S
                                                │
                                                ▼
                                   ┌──────────────────────────┐
-                                  │  uniclaw-receipt::canonical
+                                  │  boardproof-receipt::canonical
                                   │  RFC 8785 JCS encoder    │
                                   │                          │
                                   │  Lexicographic key sort  │
@@ -43,7 +43,7 @@ The receipt format is the trust artifact every other layer eventually crosses. S
                 ┌────────────────────┬──────────┴─────────┬────────────────────┐
                 ▼                    ▼                    ▼                    ▼
         BLAKE3 hash          Ed25519 sign         Ed25519 verify       Browser verifier
-        (content_id)         (kernel)             (uniclaw-verify)     (verify.html)
+        (content_id)         (kernel)             (boardproof-verify)     (verify.html)
                                                                        JS port of canonical
                                                                        — byte-identical bytes
                                                                        (proven by
@@ -99,14 +99,14 @@ The JCS algorithm (~100 LOC of Rust):
 1. Serialize the receipt body to a `serde_json::Value` (keeps the algorithm decoupled from the specific Rust types).
 2. Walk the Value tree:
    - `null` → `null`, `true` → `true`, `false` → `false`.
-   - Numbers: emit as decimal. **Floats panic** — Uniclaw's schema has no floats, so a float here would be a bug.
+   - Numbers: emit as decimal. **Floats panic** — BoardProof's schema has no floats, so a float here would be a bug.
    - Strings: standard JSON escapes (`"` → `\"`, `\\` → `\\\\`, controls → `\uXXXX` lowercase, `\b\f\n\r\t` named escapes, everything else UTF-8 verbatim, **no `\/` escape**).
    - Arrays: `[v1,v2,...]` (no whitespace).
    - Objects: sort keys by UTF-16 code unit order, emit as `{"k1":v1,"k2":v2,...}`.
 
 The output is JCS-canonical bytes. Hash with BLAKE3 → content_id. Sign with Ed25519 → receipt signature. Re-canonicalize on verify → check signature.
 
-The JS port in `crates/uniclaw-host/src/verify.html` is ~30 LOC. Same algorithm; same output. The Node smoke test proves byte-identity over the 5 reference fixtures.
+The JS port in `crates/boardproof-host/src/verify.html` is ~30 LOC. Same algorithm; same output. The Node smoke test proves byte-identity over the 5 reference fixtures.
 
 ## Why this design choice and not another?
 
@@ -114,13 +114,13 @@ The JS port in `crates/uniclaw-host/src/verify.html` is ~30 LOC. Same algorithm;
 - **Why bump `RECEIPT_FORMAT_VERSION` rather than canonicalize all receipts (including old ones)?** Old receipts in the wild were signed over the legacy bytes. If we recanonicalize them now, the signature breaks. The v1 path stays around so existing receipts continue to verify.
 - **Why implement JCS ourselves (~100 LOC) rather than depend on `serde_jcs` or `json-canon`?** The algorithm is small enough we can audit our own implementation cell by cell. External crates introduce a new dep with its own quality/size implications, and the canonicalization correctness is *load-bearing* for the entire receipt format — better to own the implementation than to trust a transitive.
 - **Why `serde_json::to_value` as the intermediate representation?** Keeps the canonicalizer decoupled from our specific Rust types. Anything that implements `Serialize` can canonicalize. The cost is a Value-tree allocation per call (~30 µs/receipt; see the bench). A direct serializer (no Value-tree round-trip) would be 3-5× faster — that's a future-step optimisation, listed below.
-- **Why panic on floats rather than silently format them?** RFC 8785 §3.2.2.4 specifies ECMA-262 §7.1.12.1 minimal float representation, which is non-trivial to implement correctly. Uniclaw's schema has no floats. If a future field adds one, the panic is a load-bearing assertion that someone has to update the canonicalizer (and verify the new behaviour against test vectors) before the format ships.
+- **Why panic on floats rather than silently format them?** RFC 8785 §3.2.2.4 specifies ECMA-262 §7.1.12.1 minimal float representation, which is non-trivial to implement correctly. BoardProof's schema has no floats. If a future field adds one, the panic is a load-bearing assertion that someone has to update the canonicalizer (and verify the new behaviour against test vectors) before the format ships.
 - **Why didn't we add `key_id` in this PR?** The war analysis lists it as part of the same "highest-leverage" work, but each piece (canonicalization, key_id, witness signatures, transparency log) deserves its own design conversation. Canonicalization is the foundation: every later piece builds on top of it. `key_id` lands as a follow-up PR (or a Phase 6 governance step) once the canonicalizer is shipped and stable.
 
 ## What you can do with this step today
 
 - Mint a v2 receipt — every kernel call now produces them automatically (`RECEIPT_FORMAT_VERSION = 2`).
-- Verify a v2 receipt with `uniclaw-verify` — same binary, recognises the new schema_version and dispatches to JCS.
+- Verify a v2 receipt with `boardproof-verify` — same binary, recognises the new schema_version and dispatches to JCS.
 - Verify a v2 receipt in the browser — the `verify.html` page ships a JS JCS implementation. Save the page offline; verify any v2 receipt without trusting any server.
 - Add a verifier in another language: implement JCS (or use a library), load `canonical-v2.json`, check conformance. The `conformance-smoke.mjs` Node test is the reference shape.
 - Trust that pre-step-19 receipts continue to verify — backwards compatibility is preserved.
@@ -152,13 +152,13 @@ A future-step optimisation: a direct serde Serializer that emits canonical bytes
 
 ## Adopt-don't-copy
 
-- **RFC 8785 (Cyberphone)** is the canonical reference for the JCS algorithm. Implementation is small enough we wrote our own (~100 LOC) rather than pull a transitive crate; see `crates/uniclaw-receipt/src/canonical.rs` for the cell-by-cell implementation. Test vectors derived from RFC 8785's published examples (Appendix B) inform our test cases.
+- **RFC 8785 (Cyberphone)** is the canonical reference for the JCS algorithm. Implementation is small enough we wrote our own (~100 LOC) rather than pull a transitive crate; see `crates/boardproof-receipt/src/canonical.rs` for the cell-by-cell implementation. Test vectors derived from RFC 8785's published examples (Appendix B) inform our test cases.
 
 No source borrowed.
 
 ## In summary
 
-Step 19 closes the foundational gap that's been blocking Uniclaw from being a real protocol: receipt bytes are now deterministic *across languages*, not just deterministic *in Rust*. The browser verifier already produces byte-identical output to the Rust canonicalizer for every reference vector. New verifier implementations in Go, Python, Swift, etc. can self-test against the published fixture. Schema-version dispatch keeps backwards compatibility for v1 receipts in the wild.
+Step 19 closes the foundational gap that's been blocking BoardProof from being a real protocol: receipt bytes are now deterministic *across languages*, not just deterministic *in Rust*. The browser verifier already produces byte-identical output to the Rust canonicalizer for every reference vector. New verifier implementations in Go, Python, Swift, etc. can self-test against the published fixture. Schema-version dispatch keeps backwards compatibility for v1 receipts in the wild.
 
 After step 19, Phase 4 (federated memory) becomes the right next major phase — and every receipt it produces lands on a wire format that the rest of the world can already verify. Each Phase 4 receipt type adds to the same canonical foundation rather than each one re-deciding its own canonicalization story.
 

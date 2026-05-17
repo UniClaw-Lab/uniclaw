@@ -3,11 +3,11 @@
 > **Phase:** 3.5 — Receipt-format hardening + adoption-foundations
 > **PR:** _this PR_
 > **Spec change:** RFC-0001 rev **2.1** (wire `schema_version` stays `2`; additive optional field)
-> **Crates / packages touched:** `uniclaw-receipt`, `uniclaw-kernel`, `uniclaw-host` (api + bin + signer), `packages/verifier-ts`, `packages/client-ts`, `packages/client-py`. **Conformance fixture (`canonical-v2.json`) gains 2 new vectors.**
+> **Crates / packages touched:** `boardproof-receipt`, `boardproof-kernel`, `boardproof-host` (api + bin + signer), `packages/verifier-ts`, `packages/client-ts`, `packages/client-py`. **Conformance fixture (`canonical-v2.json`) gains 2 new vectors.**
 
 ## What is this step?
 
-Today a Uniclaw receipt embeds an `issuer` — 32 bytes of Ed25519 public key. That's enough to verify the signature, but it has no name. Production deployments rotate keys; without a name for the key, every rotation either:
+Today a BoardProof receipt embeds an `issuer` — 32 bytes of Ed25519 public key. That's enough to verify the signature, but it has no name. Production deployments rotate keys; without a name for the key, every rotation either:
 - forks the chain (new issuer = new pinned issuer = new log), or
 - silently swaps the key bytes underneath the same log (auditors have no idea something changed).
 
@@ -18,7 +18,7 @@ The change is fully additive:
 - Receipts minted by signers **without** a `key_id` (the v0.x default) are byte-identical to pre-19a output. No old receipts re-canonicalize differently. No verifier needs an upgrade to keep validating pre-19a chains.
 - Receipts minted by signers **with** a `key_id` include the field in canonical bytes (JCS sorts it between `"issued_at"` and `"merkle_leaf"`). Any pre-19a verifier built with a permissive JSON parser will still verify them — the new field is in the canonical bytes the signature covers.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Step 19a is the first **post-multi-language schema-additive change**. The two reasons that's important:
 
@@ -82,28 +82,28 @@ All three implementations (Rust + TS + Python) produce byte-identical canonical 
 
 ## How does it work in plain words?
 
-**Rust crate `uniclaw-receipt`:**
+**Rust crate `boardproof-receipt`:**
 - `ReceiptBody` gains `pub key_id: Option<String>` with `#[serde(default, skip_serializing_if = "Option::is_none")]`. Old receipts (no field) deserialize to `None`; new receipts with the field deserialize to `Some(...)`. Serialization omits `None`. JCS handles the rest.
 
-**Rust crate `uniclaw-kernel`:**
+**Rust crate `boardproof-kernel`:**
 - The `Signer` trait gains `fn key_id(&self) -> Option<&str> { None }` (default impl returns None, so existing Signer impls are unaffected).
 - `Kernel::mint()` reads `self.signer.key_id()` and threads it into the minted body.
 
-**Rust crate `uniclaw-host` (signer + binary):**
+**Rust crate `boardproof-host` (signer + binary):**
 - `Ed25519Signer` is reshaped: `struct Ed25519Signer { key: SigningKey, key_id: Option<String> }`. Builder methods `with_key_id(impl Into<String>)` and `without_key_id()`. The existing `new(key)` and `from_seed(seed)` constructors continue to return signers with `key_id: None` (backward compat).
-- `bin/uniclaw-host.rs` gains `--key-id <string>`. When provided, the signer is configured with that key_id; every minted receipt gets it.
+- `bin/boardproof-host.rs` gains `--key-id <string>`. When provided, the signer is configured with that key_id; every minted receipt gets it.
 
-**Server response shape (`uniclaw-host::api::ReceiptResponse`):**
+**Server response shape (`boardproof-host::api::ReceiptResponse`):**
 - Optional `key_id: Option<String>` with `skip_serializing_if`. When the minted receipt has a key_id, the HTTP response includes it; otherwise the field is omitted (pre-19a wire-shape compat).
 
-**TS package `@uniclaw/verifier`:**
+**TS package `@boardproof/verifier`:**
 - `ReceiptBody` gains `key_id?: string` (optional).
 - `VerifyResult` gains `keyId?: string`. The verifier reads `body.key_id` when present and surfaces it.
 
-**TS package `@uniclaw/client`:**
+**TS package `@boardproof/client`:**
 - `DecisionBase` gains `keyId?: string`. The client reads the server's optional `key_id` in the wire response and threads it through into every `Decision` variant (`allowed`, `denied`, `approved`, `pending`).
 
-**Python package `uniclaw-client`:**
+**Python package `boardproof-client`:**
 - `_DecisionBase.key_id: str | None = None` field; same in `VerifyResult`. `verify_receipt` reads `body["key_id"]` when present; `_build_decision` threads it from the wire response.
 
 ## What you can do with this step today
@@ -111,7 +111,7 @@ All three implementations (Rust + TS + Python) produce byte-identical canonical 
 Start the host with a key identifier:
 
 ```bash
-uniclaw-host \
+boardproof-host \
     --constitution constitutions/solo-dev.toml \
     --signer-seed-hex $SIGNER_SEED \
     --bearer-token-hex $TOKEN \
@@ -147,7 +147,7 @@ Tampering with `key_id` after signing breaks the signature — verified by tests
 
 ## Adopt-don't-copy
 
-- The `key_id` concept is generic (cryptography textbooks use it; JWT has `kid`; X.509 has `subjectKeyIdentifier`). The Uniclaw choice — opaque operator-chosen string, embedded in the signed body, audit-only — is the simplest possible shape.
+- The `key_id` concept is generic (cryptography textbooks use it; JWT has `kid`; X.509 has `subjectKeyIdentifier`). The BoardProof choice — opaque operator-chosen string, embedded in the signed body, audit-only — is the simplest possible shape.
 - No source borrowed. The implementation is ~15 LOC per language.
 
 ## What this step does **not** ship

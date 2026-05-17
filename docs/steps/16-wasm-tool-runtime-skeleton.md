@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Tools and Secrets
 > **PR:** _this PR_
-> **Crate introduced:** `uniclaw-tools-wasm`
+> **Crate introduced:** `boardproof-tools-wasm`
 > **Crates touched:** none (additive)
 
 ## What is this step?
@@ -16,7 +16,7 @@ Step 16 was always going to be the biggest jump in Phase 3 (wasmtime brings ~70 
 
 This split means a failure during 16b localises to "the bindgen layer" rather than "is the runtime broken or is bindgen broken." It also keeps each PR's review surface comparable to step 14/15 — much easier to audit.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Phase 3's Hands layer is now four layers deep:
 
@@ -100,8 +100,8 @@ The result is a ~700-LOC crate (manifest validation + resource limits + per-call
 ## How does it work in plain words?
 
 ```rust
-use uniclaw_tools_wasm::{WasmConfig, WasmTool};
-use uniclaw_tools::{ApprovalPolicy, Capability, GlobPattern, Tool, ToolManifest};
+use boardproof_tools_wasm::{WasmConfig, WasmTool};
+use boardproof_tools::{ApprovalPolicy, Capability, GlobPattern, Tool, ToolManifest};
 
 // 1. Build a tool from .wat text (or .wasm bytes via from_module_bytes).
 let manifest = ToolManifest {
@@ -152,7 +152,7 @@ Errors from the guest are signalled via wasm traps (`unreachable`, OOB, etc.). T
 - **`IronClaw`'s wasmtime + Component Model + WIT substrate** — adopted as the architecture for step 16 as a whole. 16a borrows IronClaw's three-bound resource-limiter pattern (fuel + memory + epoch combined). 16b will adopt the WIT-based interface model. No source borrowed.
 - **wasmtime's safe API** — we use `Engine`, `Module`, `Store`, `Linker`, `Instance`, `TypedFunc`, and `ResourceLimiter` directly. The workspace's `unsafe_code = "forbid"` lint applies; wasmtime's safe surface is enough for the runtime.
 
-Citations live in `uniclaw-tools-wasm/src/lib.rs`.
+Citations live in `boardproof-tools-wasm/src/lib.rs`.
 
 ## What you can do with this step today
 
@@ -184,4 +184,4 @@ Cold construction is dominated by Cranelift AOT codegen (the echo fixture is tin
 
 ## In summary
 
-Step 16a closes the gap between "Uniclaw has a Tool trait" and "Uniclaw can run arbitrary sandboxed code." `WasmTool` wraps wasmtime behind the same `Tool` interface every other tool implements; fuel + memory + epoch limits enforce CPU + heap + wall-clock bounds independently; the `ToolError::Timeout` variant from step 13 finally has its first real producer. The skeleton is intentionally minimal — no Component Model, no host imports, no clever optimisations — so 16b and 16c can land additively against a runtime that's already proven correct in isolation.
+Step 16a closes the gap between "BoardProof has a Tool trait" and "BoardProof can run arbitrary sandboxed code." `WasmTool` wraps wasmtime behind the same `Tool` interface every other tool implements; fuel + memory + epoch limits enforce CPU + heap + wall-clock bounds independently; the `ToolError::Timeout` variant from step 13 finally has its first real producer. The skeleton is intentionally minimal — no Component Model, no host imports, no clever optimisations — so 16b and 16c can land additively against a runtime that's already proven correct in isolation.

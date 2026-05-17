@@ -1,0 +1,175 @@
+// BoardProof WASM Tool surface — Component Model.
+//
+// Phase 3 step 16b shipped the `tool` world (export-only). Step 16c
+// adds a `host` interface plus a `tool-with-host` world that imports
+// `host`. Tools that want capability-mediated I/O implement the new
+// world; tools that don't (16b's echo, future pure-compute Components)
+// keep using the original `tool` world.
+//
+// Both worlds export the same `tool-api` interface, so the
+// guest-visible call shape is unchanged. The only difference is
+// whether the guest has access to host functions.
+//
+// ## v0 host interface (16c)
+//
+// The `host` interface is deliberately small. It's:
+//
+//   - `log-message` / `now-millis`: cheap utilities tools commonly
+//     need. Logs are rate-limited host-side; clock returns Unix
+//     epoch milliseconds.
+//   - `secret-exists`: existence check ONLY. Returns whether the
+//     given secret reference name is registered in the host's
+//     SecretBroker. **NEVER returns the value.** The name is what
+//     the guest passes to `http-fetch` for credential injection;
+//     existence-check is so the guest can fail early before
+//     starting work.
+//   - `http-fetch`: routed through the host's `HttpFetchTool` —
+//     the same instance, same capability allowlist, same SSRF
+//     gates, same response bound from step 14. Auth (the
+//     `bearer-header` variant) injects credentials at the host
+//     boundary; the guest never sees the secret value.
+//
+// ## What's NOT in 16c
+//
+// On the future-step list, deliberately out of scope here:
+//
+//   - `tool-invoke` (calling another tool from the guest) —
+//     composition complexity; defer.
+//   - `workspace-read` — needs filesystem capability machinery
+//     first.
+//   - Output sanitization at the host boundary — step 18.
+//
+// ## Adopt-don't-copy
+//
+// IronClaw's `near:agent@0.3.0/host` interface
+// (`ironclaw/wit/tool.wit`) is the architectural reference for
+// the shape: log-level enum, structured response records,
+// auth-by-reference rather than auth-by-value. BoardProof's v0
+// surface is leaner; the richer pieces (workspace-read,
+// tool-invoke, structured rate-limit hints) land additively
+// when use cases demand them. No source borrowed.
+
+package boardproof:tool@0.1.0;
+
+interface tool-api {
+    /// Execute the tool with raw input bytes; return raw output
+    /// bytes on success, or a free-form error string on a
+    /// guest-detected error.
+    ///
+    /// Engine errors (fuel exhaustion, epoch deadline reached,
+    /// memory cap) trap the guest before this function returns;
+    /// the host catches the trap and returns the appropriate
+    /// `ToolError` variant. Guest-internal errors (parse failure,
+    /// invariant violation, etc.) should be returned via the
+    /// `err` arm so the caller can distinguish them from sandbox
+    /// failures.
+    call: func(input: list<u8>) -> result<list<u8>, string>;
+}
+
+/// Host-side capabilities that 16c-and-later tools can import.
+///
+/// All four functions execute on the *host* and never inside the
+/// sandbox. The host enforces capability checks, rate limits,
+/// and credential injection on every call.
+interface host {
+    /// Log levels for structured logging. Mirrors
+    /// `tracing::Level` but kept stable for the wire.
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Header pairs as the host returns them. Names are
+    /// lower-cased on the wire (HTTP/1.1 §4.2 says header field
+    /// names are case-insensitive; we normalise to lowercase
+    /// for stable comparisons).
+    record http-response {
+        /// HTTP status code (200, 404, 500, …).
+        status: u16,
+        /// Response headers as ordered name/value pairs.
+        /// Duplicates allowed (`set-cookie` etc).
+        headers: list<tuple<string, string>>,
+        /// Response body bytes. Already host-side bounded
+        /// (refused before reaching the guest if oversized).
+        body: list<u8>,
+    }
+
+    /// How a secret should be applied to the outgoing request.
+    /// v0 supports a single variant; future variants
+    /// (`custom-header`, `basic-auth`, AWS SigV4, etc.) land
+    /// additively.
+    ///
+    /// The string is the **broker reference name**, not the
+    /// secret value. The host fetches the value from its
+    /// `SecretBroker` at call time and injects it into the
+    /// request header. The guest never sees the value.
+    variant auth-spec {
+        /// `Authorization: Bearer <broker[secret-ref]>`.
+        bearer-header(string),
+    }
+
+    /// Emit a structured log entry. Rate-limited host-side
+    /// (max 1000 entries / 4 KiB per message, by default).
+    /// Entries are accumulated and surfaced to the host for
+    /// audit; nothing reaches stdio inside the sandbox.
+    log-message: func(level: log-level, message: string);
+
+    /// Current Unix epoch time in milliseconds. Useful for
+    /// guests that need monotonically-comparable timestamps
+    /// without WASI clock plumbing.
+    now-millis: func() -> u64;
+
+    /// Returns whether `name` is registered in the host's
+    /// SecretBroker.
+    ///
+    /// **Never returns the secret value.** v0 brokers don't
+    /// model caller identity, so this is effectively
+    /// `broker.fetch(name).is_ok()`. Use this to fail-fast
+    /// before starting expensive work that depends on a
+    /// credential being present.
+    secret-exists: func(name: string) -> bool;
+
+    /// Fetch an HTTP resource. Routed through the host's
+    /// `HttpFetchTool` instance, which means the call goes
+    /// through *the same* capability allowlist, SSRF gate,
+    /// bounded-response logic, and broker-backed auth
+    /// injection that direct host-side `HttpFetchTool::call`
+    /// gets in step 14/15.
+    ///
+    /// Errors:
+    ///   - capability denied (host's allowlist refuses the host)
+    ///   - SSRF refused (literal-IP private/loopback/etc)
+    ///   - oversize response
+    ///   - timeout
+    ///   - broker can't satisfy `auth.bearer-header(secret-ref)`
+    ///   - any other transport failure
+    /// All surface as `Err(string)` with a free-form message.
+    /// `timeout-ms` is capped at the host's per-call deadline
+    /// so a guest can't extend its execution by burning host
+    /// time.
+    http-fetch: func(
+        url: string,
+        auth: option<auth-spec>,
+        timeout-ms: option<u32>,
+    ) -> result<http-response, string>;
+}
+
+/// World for tools that don't import any host capabilities.
+/// 16b's echo fixture uses this. Pure compute, no I/O.
+world tool {
+    export tool-api;
+}
+
+/// World for tools that need capability-mediated host imports.
+/// Imports `host` and exports `tool-api`.
+///
+/// The host MUST satisfy all `host` imports when instantiating;
+/// `WasmTool::from_component_bytes_with_host(...)` is the
+/// constructor that wires everything up.
+world tool-with-host {
+    import host;
+    export tool-api;
+}

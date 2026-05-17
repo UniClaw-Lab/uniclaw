@@ -1,0 +1,31 @@
+[package]
+name = "boardproof-verify"
+description = "Standalone verifier for BoardProof receipts. ≤ 200 LOC, no kernel dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "boardproof-verify"
+path = "src/main.rs"
+
+[dependencies]
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }
+serde_json.workspace = true
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+
+[lints]
+workspace = true

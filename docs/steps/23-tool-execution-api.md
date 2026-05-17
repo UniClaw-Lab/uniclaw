@@ -2,7 +2,7 @@
 
 > **Phase:** 3.5 — Receipt-format hardening + adoption-foundations
 > **PR:** _this PR_
-> **Crates touched:** `uniclaw-host` (new endpoint + handler) + `packages/client-ts` (new method)
+> **Crates touched:** `boardproof-host` (new endpoint + handler) + `packages/client-ts` (new method)
 > **New artefacts:** `POST /v1/tool-executions` server route, `client.recordToolExecution(...)` TS method
 
 ## What is this step?
@@ -22,14 +22,14 @@ After this PR, the whole agent action flow works over HTTP:
 
 Real integrators (OpenClaw, NemoClaw, custom TS agents) can now anchor *every step* of an agent action without any embedded Rust.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 ```
 ┌──────────────────────────┐     POST /v1/proposals
 │  Agent runtime           │ ──────────────────────►  ┌──────────────────────┐
-│  (TS / Python / Go / …)  │                          │ uniclaw-host         │
+│  (TS / Python / Go / …)  │                          │ boardproof-host         │
 │                          │ ◄──────  AllowedDecision │ + kernel             │
-│  @uniclaw/client         │                          │ + constitution       │
+│  @boardproof/client         │                          │ + constitution       │
 │  client.evaluate()       │                          │ + log (RwLock)       │
 │                          │                          │                      │
 │  (run tool here, get     │                          │                      │
@@ -81,11 +81,11 @@ The war analysis lists three conceptual endpoints — `tool-executions`, `secret
 - A tool execution **with** `redaction` carries the same provenance shape as a standalone redaction event would.
 - Detached secret-use or redaction events (not tied to any tool call) don't have a clear use case today.
 
-One endpoint covers all three semantics. If a future Uniclaw release adds standalone events, they can land as additional endpoints without changing this one.
+One endpoint covers all three semantics. If a future BoardProof release adds standalone events, they can land as additional endpoints without changing this one.
 
 ### 3. "How does verify-by-default handle the new receipt class?"
 
-Same as for proposal/approval receipts: the client re-fetches `/receipts/<hash>`, reconstructs canonical body bytes via the JCS port from `@uniclaw/verifier`, recomputes BLAKE3, compares to the URL claim, and verifies the Ed25519 signature against the embedded issuer key. The `$kernel/tool/executed` action.kind is just another value in the body — the verifier doesn't care about kind, only about bytes and signatures.
+Same as for proposal/approval receipts: the client re-fetches `/receipts/<hash>`, reconstructs canonical body bytes via the JCS port from `@boardproof/verifier`, recomputes BLAKE3, compares to the URL claim, and verifies the Ed25519 signature against the embedded issuer key. The `$kernel/tool/executed` action.kind is just another value in the body — the verifier doesn't care about kind, only about bytes and signatures.
 
 ### 4. "What can't I submit yet?"
 
@@ -95,7 +95,7 @@ Same as for proposal/approval receipts: the client re-fetches `/receipts/<hash>`
 
 ## How does it work in plain words?
 
-The server-side handler (`crates/uniclaw-host/src/api.rs::post_tool_execution`):
+The server-side handler (`crates/boardproof-host/src/api.rs::post_tool_execution`):
 
 1. Parses `allowed_receipt_id` as a 32-byte digest (400 on malformed hex).
 2. Requires **exactly one** of `output_hash` / `error` to be set (400 otherwise).
@@ -161,7 +161,7 @@ The client-side method (`packages/client-ts/src/client.ts::recordToolExecution`)
 
 ## Verified during this PR
 
-- **10 new Rust integration tests** in `crates/uniclaw-host/tests/api.rs`:
+- **10 new Rust integration tests** in `crates/boardproof-host/tests/api.rs`:
   - Success path with chain linkage assertion (`prev_hash` of execution == `leaf_hash` of allowed).
   - `secrets_used` emits one `secret_used` provenance edge per name.
   - `redaction` populates `body.redactor_stack_hash`, emits `redaction_applied` edges only for rules with `count > 0`, and the `tool_output` provenance edge references the POST-redaction hash.
@@ -183,7 +183,7 @@ The client-side method (`packages/client-ts/src/client.ts::recordToolExecution`)
 
 ## Adopt-don't-copy
 
-- The HTTP wire shape (`allowed_receipt_id` + optional `output_hash` / `error` / `secrets_used` / `redaction`) is original to Uniclaw. None of the reference claw runtimes ship a comparable surface — IronClaw has internal audit events, but they aren't published over HTTP with cryptographic anchoring.
+- The HTTP wire shape (`allowed_receipt_id` + optional `output_hash` / `error` / `secrets_used` / `redaction`) is original to BoardProof. None of the reference claw runtimes ship a comparable surface — IronClaw has internal audit events, but they aren't published over HTTP with cryptographic anchoring.
 - The kernel's `RecordToolExecution` flow was already in place since steps 13 + 15 + 18; this PR is the HTTP exposure, not a kernel change.
 
 ## What this step does **not** ship
@@ -212,4 +212,4 @@ Threshold status:
 - ✅ Threshold 2 (visibility) — closed by step 20.
 - 🟢 Threshold 3 (adoption) — **first adapter ships, complete enough to integrate real agents.** Next: a worked OpenClaw or NemoClaw demo using the now-complete API, plus a Python sibling for compliance tooling.
 
-The proposal was Uniclaw-anchored. The approval was Uniclaw-anchored. **Now every tool action is Uniclaw-anchored too.** The agent doesn't need to know Rust exists.
+The proposal was BoardProof-anchored. The approval was BoardProof-anchored. **Now every tool action is BoardProof-anchored too.** The agent doesn't need to know Rust exists.

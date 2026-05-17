@@ -2,12 +2,12 @@
 
 > **Phase:** 3.5 — Receipt-format hardening + adoption-foundations
 > **PR:** _this PR_
-> **Crates touched:** `uniclaw-host` (api + bin)
+> **Crates touched:** `boardproof-host` (api + bin)
 > **No new crate, no schema change, no client change.**
 
 ## What is this step?
 
-Before this PR, `uniclaw-host --constitution <path>` (proposal mode) and `uniclaw-host --db <path>` (persistent mode) were **mutually exclusive**. Proposal mode used `InMemoryReceiptLog` only; restart the host and every minted receipt's URL went 404.
+Before this PR, `boardproof-host --constitution <path>` (proposal mode) and `boardproof-host --db <path>` (persistent mode) were **mutually exclusive**. Proposal mode used `InMemoryReceiptLog` only; restart the host and every minted receipt's URL went 404.
 
 That was the single largest deployment blocker for everything we've shipped since step 21:
 
@@ -16,15 +16,15 @@ That was the single largest deployment blocker for everything we've shipped sinc
 - Step 25 ships authentication → you can safely expose the sidecar, but only for a single process lifetime.
 - Step 19a ships `key_id` → you can name keys, but a key only outlives one process if its receipts do.
 
-Step 26 unblocks all of it. `uniclaw-host --constitution <path> --db <path>` now works together: the kernel mints over HTTP, every minted receipt is persisted to a `SqliteReceiptLog`, and on restart the kernel **resumes its state from the log's head** so the chain continues seamlessly at the next sequence number.
+Step 26 unblocks all of it. `boardproof-host --constitution <path> --db <path>` now works together: the kernel mints over HTTP, every minted receipt is persisted to a `SqliteReceiptLog`, and on restart the kernel **resumes its state from the log's head** so the chain continues seamlessly at the next sequence number.
 
 ```
-$ uniclaw-host \
+$ boardproof-host \
     --constitution constitutions/solo-dev.toml \
     --signer-seed-hex $SIGNER_SEED \
     --bearer-token-hex $TOKEN \
     --key-id "prod-2026" \
-    --db /var/lib/uniclaw/receipts.db \
+    --db /var/lib/boardproof/receipts.db \
     --bind 0.0.0.0:8787
 
 # (mint some receipts via /v1/proposals)
@@ -34,14 +34,14 @@ $ uniclaw-host \
 # New receipts mint at sequence = (last + 1), prev_hash = (last leaf).
 ```
 
-This is the **first production-deployable** state for Uniclaw — restart-safe, auth-gated, key-identified, persistent.
+This is the **first production-deployable** state for BoardProof — restart-safe, auth-gated, key-identified, persistent.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Step 26 is the final foundation layer before threshold 3 (adoption) gets a real test. After this:
 
-- A real claw can integrate (`@uniclaw/client` / `uniclaw-client`) against a sidecar that survives ops events.
-- A hosted `demo.uniclaw.dev` instance becomes operationally credible.
+- A real claw can integrate (`@boardproof/client` / `boardproof-client`) against a sidecar that survives ops events.
+- A hosted `demo.boardproof.dev` instance becomes operationally credible.
 - Compliance use cases (SOC 2 evidence chains) can rely on the chain across business days.
 - Key rotation (Phase 6) lands on a chain that doesn't reset between rotations.
 
@@ -69,7 +69,7 @@ Step 26 pays that complexity tax: `ApiState<L>` becomes generic; every handler s
 
 ### 2. "Why does Kernel::new not work after restart?"
 
-The kernel carries `KernelState { sequence, prev_hash }` (see `crates/uniclaw-kernel/src/state.rs`). `Kernel::new` calls `KernelState::genesis()` — `sequence = 0`, `prev_hash = [0u8; 32]`. After a restart against a populated `SqliteReceiptLog`, the kernel would mint at sequence 0 again and the log would reject with `AppendError::OutOfOrder { expected: 3, got: 0 }`.
+The kernel carries `KernelState { sequence, prev_hash }` (see `crates/boardproof-kernel/src/state.rs`). `Kernel::new` calls `KernelState::genesis()` — `sequence = 0`, `prev_hash = [0u8; 32]`. After a restart against a populated `SqliteReceiptLog`, the kernel would mint at sequence 0 again and the log would reject with `AppendError::OutOfOrder { expected: 3, got: 0 }`.
 
 Fix: a small helper `api::build_kernel_from_log(&log, signer, constitution)`:
 
@@ -95,9 +95,9 @@ The DB pins one issuer in its meta table at first open. Re-opening with a DIFFER
 The binary checks `SqliteReceiptLog::peek_issuer(db_path)` BEFORE calling `open` so it can produce a helpful error:
 
 ```
-$ uniclaw-host --constitution ... --signer-seed-hex <NEW> --db /var/lib/uniclaw/receipts.db
+$ boardproof-host --constitution ... --signer-seed-hex <NEW> --db /var/lib/boardproof/receipts.db
 Error: kernel signing key (issuer 197f6b23…) does not match the pinned issuer
-       of the SQLite log at /var/lib/uniclaw/receipts.db (issuer ab12cd34…).
+       of the SQLite log at /var/lib/boardproof/receipts.db (issuer ab12cd34…).
        Refusing to fork the chain. Use the original signing seed, or start a new
        DB at a different path.
 ```
@@ -106,15 +106,15 @@ If the operator gets past `peek_issuer` somehow, `SqliteReceiptLog::open` itself
 
 ### 4. "What about the wire format?"
 
-**Unchanged.** Receipts on the wire are identical whether the backing log is in-memory or SQLite. The clients (`@uniclaw/client`, `uniclaw-client`) need no changes; their tests pass against the new release binary without modification.
+**Unchanged.** Receipts on the wire are identical whether the backing log is in-memory or SQLite. The clients (`@boardproof/client`, `boardproof-client`) need no changes; their tests pass against the new release binary without modification.
 
 ## How does it work in plain words?
 
-Three changes, all in `crates/uniclaw-host`:
+Three changes, all in `crates/boardproof-host`:
 
 1. **`api::ApiState` becomes generic over `L`.** Every `/v1` handler signature gains `<L: ReceiptLog + Send + Sync + 'static>`. Existing tests (in-memory) compile unchanged because Rust's type inference picks up `InMemoryReceiptLog` from the test fixture.
 2. **New helper `api::build_kernel_from_log`.** Threads through `log.last()` to decide between `Kernel::new` (empty log) and `Kernel::resume` (non-empty). Used by the binary AND by the new SQLite tests.
-3. **Binary `bin/uniclaw-host.rs` allows `--constitution` + `--db` together.** The path was previously a hard `bail!`; now it dispatches to `serve_proposal_mode<L>` with either `InMemoryReceiptLog` (existing default) or `SqliteReceiptLog` (`--db` supplied). The SQLite path runs an issuer-pin pre-check via `peek_issuer` for a clean error message.
+3. **Binary `bin/boardproof-host.rs` allows `--constitution` + `--db` together.** The path was previously a hard `bail!`; now it dispatches to `serve_proposal_mode<L>` with either `InMemoryReceiptLog` (existing default) or `SqliteReceiptLog` (`--db` supplied). The SQLite path runs an issuer-pin pre-check via `peek_issuer` for a clean error message.
 
 ## What you can do with this step today
 
@@ -126,12 +126,12 @@ TOKEN=$(head -c 32 /dev/urandom | xxd -p -c 64)
 SEED=$(head -c 32 /dev/urandom | xxd -p -c 64)
 
 # First boot.
-uniclaw-host \
+boardproof-host \
     --constitution constitutions/solo-dev.toml \
     --signer-seed-hex $SEED \
     --bearer-token-hex $TOKEN \
     --key-id "prod-2026" \
-    --db /var/lib/uniclaw/receipts.db \
+    --db /var/lib/boardproof/receipts.db \
     --bind 0.0.0.0:8787
 ```
 
@@ -139,12 +139,12 @@ Mint some receipts via `POST /v1/proposals`. Operator restarts the host (deploy,
 
 ```bash
 # Same flags. The chain continues at the next sequence number.
-uniclaw-host \
+boardproof-host \
     --constitution constitutions/solo-dev.toml \
     --signer-seed-hex $SEED \
     --bearer-token-hex $TOKEN \
     --key-id "prod-2026" \
-    --db /var/lib/uniclaw/receipts.db \
+    --db /var/lib/boardproof/receipts.db \
     --bind 0.0.0.0:8787
 ```
 
@@ -163,7 +163,7 @@ Every previously-published `/receipts/<hash>` URL still 200s. Auditors can still
   - `cargo build --workspace --all-targets` → exit 0
   - `cargo test --workspace` → 427/427, exit 0
   - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
-- **Cross-language smoke against the fresh release binary**: TS 52/52 + Python 84/84 with integration enabled (`UNICLAW_INTEGRATION=1`). The clients run unchanged — wire format is identical.
+- **Cross-language smoke against the fresh release binary**: TS 52/52 + Python 84/84 with integration enabled (`BOARDPROOF_INTEGRATION=1`). The clients run unchanged — wire format is identical.
 - **Bench** (`bench-results/26-proposal-mode-persistence.txt`):
   - In-memory mode: 13.3 ms/req (HTTP keepalive, 200 sequential POST `/v1/proposals`).
   - SQLite mode: **7.1 ms/req** (faster on this run — cross-process system noise dominates the difference; both well below any meaningful latency budget).
@@ -172,7 +172,7 @@ Every previously-published `/receipts/<hash>` URL still 200s. Auditors can still
 ## Adopt-don't-copy
 
 - No source borrowed.
-- The `Kernel::resume(state, ...)` API was already in `uniclaw-kernel` (since the kernel state-machine sketch in step 1) — this PR is the first real consumer.
+- The `Kernel::resume(state, ...)` API was already in `boardproof-kernel` (since the kernel state-machine sketch in step 1) — this PR is the first real consumer.
 - `SqliteReceiptLog`'s WAL-mode locking + `peek_issuer` helper already shipped in step 10.
 
 ## What this step does **not** ship
@@ -185,7 +185,7 @@ Every previously-published `/receipts/<hash>` URL still 200s. Auditors can still
 
 ## Performance / size
 
-Same numbers as the bench above. No new dependencies (everything was already in the workspace since step 10). Binary size for `uniclaw-host` stripped: ~6.5 MB (unchanged — `rusqlite` was already linked).
+Same numbers as the bench above. No new dependencies (everything was already in the workspace since step 10). Binary size for `boardproof-host` stripped: ~6.5 MB (unchanged — `rusqlite` was already linked).
 
 ## In summary
 

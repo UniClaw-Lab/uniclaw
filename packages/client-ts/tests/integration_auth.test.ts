@@ -1,13 +1,13 @@
 // Integration test for step 25 (bearer-token auth). Spawns
-// uniclaw-host with `--bearer-token-hex <token>` and verifies:
+// boardproof-host with `--bearer-token-hex <token>` and verifies:
 //
 // - Without `bearerToken` on the client, /v1 calls 401.
 // - With the WRONG `bearerToken`, /v1 calls 401.
 // - With the CORRECT `bearerToken`, /v1 calls succeed.
 // - Read-only routes (GET /receipts/<hash>, /verify) stay public.
 //
-// Opt-in via `UNICLAW_INTEGRATION=1`. The release binary at
-// `target/release/uniclaw-host` must exist.
+// Opt-in via `BOARDPROOF_INTEGRATION=1`. The release binary at
+// `target/release/boardproof-host` must exist.
 
 import { ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -16,18 +16,18 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { UniclawClient, UniclawError } from "../src/index.js";
+import { BoardProofClient, BoardProofError } from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "../../..");
-const HOST_BIN = resolve(REPO_ROOT, "target/release/uniclaw-host");
+const HOST_BIN = resolve(REPO_ROOT, "target/release/boardproof-host");
 const FIXTURE = resolve(here, "fixtures/test-constitution.toml");
 const SEED_HEX = "2a".repeat(32);
 // Distinct token for this suite so it doesn't collide with other
 // fixtures.
 const TOKEN_HEX = "c3".repeat(32);
 
-const INTEGRATION = process.env["UNICLAW_INTEGRATION"] === "1";
+const INTEGRATION = process.env["BOARDPROOF_INTEGRATION"] === "1";
 
 let child: ChildProcess | undefined;
 let baseUrl = "";
@@ -36,7 +36,7 @@ async function startAuthedHost(): Promise<string> {
   if (!existsSync(HOST_BIN)) {
     throw new Error(
       `release binary missing: ${HOST_BIN}\n` +
-        `Run \`cargo build --release --bin uniclaw-host -p uniclaw-host\` first.`,
+        `Run \`cargo build --release --bin boardproof-host -p boardproof-host\` first.`,
     );
   }
   const proc = spawn(
@@ -56,7 +56,7 @@ async function startAuthedHost(): Promise<string> {
   child = proc;
   const url = await new Promise<string>((resolveLine, reject) => {
     const timer = setTimeout(
-      () => reject(new Error("uniclaw-host did not bind within 10 s")),
+      () => reject(new Error("boardproof-host did not bind within 10 s")),
       10_000,
     );
     let buf = "";
@@ -75,7 +75,7 @@ async function startAuthedHost(): Promise<string> {
     });
     proc.once("exit", (code) => {
       clearTimeout(timer);
-      reject(new Error(`uniclaw-host exited early with code ${code}: ${buf}`));
+      reject(new Error(`boardproof-host exited early with code ${code}: ${buf}`));
     });
   });
   return url;
@@ -92,7 +92,7 @@ async function stopHost(): Promise<void> {
   child = undefined;
 }
 
-describe.skipIf(!INTEGRATION)("auth: bearer-token on live uniclaw-host", () => {
+describe.skipIf(!INTEGRATION)("auth: bearer-token on live boardproof-host", () => {
   beforeAll(async () => {
     baseUrl = await startAuthedHost();
   }, 15_000);
@@ -102,7 +102,7 @@ describe.skipIf(!INTEGRATION)("auth: bearer-token on live uniclaw-host", () => {
   });
 
   it("rejects evaluate without bearer token (401)", async () => {
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl,
       verifyByDefault: false,
       // intentionally no bearerToken
@@ -117,14 +117,14 @@ describe.skipIf(!INTEGRATION)("auth: bearer-token on live uniclaw-host", () => {
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeInstanceOf(UniclawError);
-    const err = caught as UniclawError;
+    expect(caught).toBeInstanceOf(BoardProofError);
+    const err = caught as BoardProofError;
     expect(err.status).toBe(401);
     expect(err.code).toBe("unauthorized");
   });
 
   it("rejects evaluate with WRONG token (401)", async () => {
-    const client = new UniclawClient({
+    const client = new BoardProofClient({
       baseUrl,
       verifyByDefault: false,
       bearerToken: "b6".repeat(32), // wrong (right length, wrong bytes)
@@ -139,12 +139,12 @@ describe.skipIf(!INTEGRATION)("auth: bearer-token on live uniclaw-host", () => {
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeInstanceOf(UniclawError);
-    expect((caught as UniclawError).status).toBe(401);
+    expect(caught).toBeInstanceOf(BoardProofError);
+    expect((caught as BoardProofError).status).toBe(401);
   });
 
   it("accepts evaluate with CORRECT token (200 + verifies cold)", async () => {
-    const client = new UniclawClient({ baseUrl, bearerToken: TOKEN_HEX });
+    const client = new BoardProofClient({ baseUrl, bearerToken: TOKEN_HEX });
     const decision = await client.evaluate({
       kind: "http.fetch",
       target: "https://example.com/with-token",
@@ -155,7 +155,7 @@ describe.skipIf(!INTEGRATION)("auth: bearer-token on live uniclaw-host", () => {
 
   it("read-only routes stay public (no token needed)", async () => {
     // Mint a receipt with auth, then fetch it without.
-    const authed = new UniclawClient({ baseUrl, bearerToken: TOKEN_HEX });
+    const authed = new BoardProofClient({ baseUrl, bearerToken: TOKEN_HEX });
     const minted = await authed.evaluate({
       kind: "http.fetch",
       target: "https://example.com/public-fetch",
@@ -164,7 +164,7 @@ describe.skipIf(!INTEGRATION)("auth: bearer-token on live uniclaw-host", () => {
 
     // No token configured on this client — GET /receipts/<hash>
     // must still succeed.
-    const reader = new UniclawClient({ baseUrl, verifyByDefault: false });
+    const reader = new BoardProofClient({ baseUrl, verifyByDefault: false });
     const receipt = await reader.getReceipt(minted.contentId);
     expect(receipt).toBeDefined();
     // verifyReceiptUrl also doesn't send auth and must work.
@@ -173,7 +173,7 @@ describe.skipIf(!INTEGRATION)("auth: bearer-token on live uniclaw-host", () => {
   });
 
   it("full chain works with auth: propose + record_tool_execution", async () => {
-    const client = new UniclawClient({ baseUrl, bearerToken: TOKEN_HEX });
+    const client = new BoardProofClient({ baseUrl, bearerToken: TOKEN_HEX });
     const allowed = await client.evaluate({
       kind: "tool.http_fetch",
       target: "https://api.example.com/auth-chain",

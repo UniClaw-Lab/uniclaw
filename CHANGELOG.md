@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Uniclaw are recorded here.
+All notable changes to BoardProof are recorded here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -10,24 +10,125 @@ format change history.
 
 ## [Unreleased]
 
+### Changed
+
+- **Project renamed from `uniclaw` to `BoardProof`** (Phase 3.5 /
+  step 28). Repo URL is now `BoardClaw-Labs/BoardProof`. The rename
+  covers **both code and docs in one PR** (per reviewer request);
+  the strategy reshape — new `docs/04-boardclaw-integration.md`,
+  reshape of `docs/03-roadmap.md` with **Phase 4 = BoardClaw
+  bridge** + **Phase 5 = mobile attestation profile**, and rewrite
+  of `docs/01-what-is-boardproof.md` with the sharper "proof for
+  AI-controlled physical devices" framing — ships as a follow-up
+  PR. Zero behavioral change in this PR — all 605 tests pass
+  identically pre and post.
+  - **17 Rust crates renamed** `uniclaw-* → boardproof-*`:
+    `boardproof-receipt`, `boardproof-verify`, `boardproof-kernel`,
+    `boardproof-constitution`, `boardproof-budget`,
+    `boardproof-explain`, `boardproof-approval`,
+    `boardproof-router`, `boardproof-store`, `boardproof-sleep`,
+    `boardproof-host`, `boardproof-store-sqlite`, `boardproof-tools`,
+    `boardproof-tools-http`, `boardproof-secrets`,
+    `boardproof-tools-wasm`, `boardproof-redact`. Workspace
+    `Cargo.toml` members list + `[workspace.dependencies]` updated
+    accordingly. Every `use uniclaw_*` import in 62 Rust source
+    files renamed (~129 files total touched by sed across `.rs`,
+    `.toml`, `.ts`, `.mjs`, `.py`, `.json`, `.wit`, `.wat`).
+  - **Binary `uniclaw-host` → `boardproof-host`.** Source file
+    `crates/boardproof-host/src/bin/boardproof-host.rs`. All CLI
+    help strings + the `/verify` HTML page (`verify.html`) updated
+    to "BoardProof Receipt Verifier".
+  - **Binary `uniclaw-verify` → `boardproof-verify`** (the
+    standalone receipt verifier).
+  - **Binary `uniclaw-explain` → `boardproof-explain`** (the cold
+    receipt explainer).
+  - **npm packages renamed** `@uniclaw/{verifier,client} →
+    @boardproof/{verifier,client}`. Both `packages/*/package.json`
+    + root workspace `package.json` + every TS source import
+    updated.
+  - **Python package renamed** `uniclaw-client → boardproof-client`;
+    module `src/uniclaw_client/ → src/boardproof_client/`; every
+    `from uniclaw_client import …` → `from boardproof_client import
+    …`. `pyproject.toml` `name`, `description`, URLs updated.
+  - **Integration env var** `UNICLAW_INTEGRATION=1 →
+    BOARDPROOF_INTEGRATION=1` (TS + Python integration test
+    opt-in).
+  - **WIT package** `uniclaw:tool@0.1.0 → boardproof:tool@0.1.0`.
+    Pre-compiled WASM fixtures (`echo-component.wasm`,
+    `http-tool-component.wasm`) rebuilt locally via
+    `cargo component build --release` to bake in the new namespace
+    (committed binaries in `crates/boardproof-tools-wasm/tests/fixtures/`).
+  - **`clippy.toml`** gained
+    `doc-valid-idents = ["BoardProof", "BoardClaw", "SecuClaw", ".."]`
+    so the doc-markdown lint doesn't flag the project names as
+    needing backticks in `///` and `//!` doc comments.
+  - **Workspace `Cargo.toml`** `repository =
+    "https://github.com/BoardClaw-Labs/BoardProof"`,
+    `homepage = "https://github.com/BoardClaw-Labs/BoardProof"`,
+    `authors = ["BoardProof Contributors"]`.
+  - **Verification** (zero regression — same 605-test total as
+    pre-PR baseline):
+    - `cargo fmt --all -- --check` → exit 0
+    - `cargo clippy --workspace --all-targets -- -D warnings` →
+      exit 0
+    - `cargo test --workspace` → **427/427**
+    - `npm test --workspace @boardproof/verifier` → **42/42**
+    - `BOARDPROOF_INTEGRATION=1 npm test --workspace
+      @boardproof/client` → **52/52**
+    - `BOARDPROOF_INTEGRATION=1 pytest` in
+      `packages/client-py` → **84/84**
+  - **Bench** (`bench-results/28-rename-boardproof.txt`): TS
+    `evaluate verify=true` 8.55 ms/req; Python `evaluate
+    verify=True` 3.23 ms/req; Python full propose+record chain
+    8.23 ms/req. All in expected band; no regression vs step-27
+    bench.
+  - **Docs sweep** (45 `.md` files): the same 7-pass sed run over
+    every doc — README, CHANGELOG header, docs/**, RFCS/0001,
+    CONTRIBUTING, SECURITY, packages/*/README. Two file paths
+    renamed: `docs/01-what-is-uniclaw.md →
+    docs/01-what-is-boardproof.md` and
+    `docs/02-uniclaw-vs-openclaw.md →
+    docs/02-boardproof-vs-openclaw.md`. Every cross-link
+    auto-updated.
+  - **Uppercase env vars in docs**: `UNICLAW_HOST_ISSUER →
+    BOARDPROOF_HOST_ISSUER`, `UNICLAW_HOST → BOARDPROOF_HOST`,
+    `UNICLAW_TOKEN → BOARDPROOF_TOKEN`, `UNICLAW_SECRET_ →
+    BOARDPROOF_SECRET_`.
+  - **What stayed `UNICLAW` (deliberately):** references to the
+    external master plan at
+    `/home/uni/Documents/GPT/claw/UNICLAW_PLAN.md` and the war
+    analysis at `UNICLAW_CLAW_WAR_ANALYSIS.md`. Those files live
+    outside this repo and still carry their original filenames.
+    When the operator renames them, a follow-up patch will catch
+    these refs.
+  - **What this PR does NOT ship:** the strategy reshape (new
+    `docs/04-boardclaw-integration.md`, reshape of
+    `docs/03-roadmap.md` with **Phase 4 = BoardClaw bridge** +
+    **Phase 5 = mobile attestation profile**, rewrite of
+    `docs/01-what-is-boardproof.md` with sharper wedge framing)
+    — that's a creative-writing follow-up PR. Memory files +
+    `.claude/settings*.json` legacy permission grants — handled
+    out-of-repo. Per-package version bump (all three packages
+    stay at 0.1.0; bump happens at first registry publish).
+
 ### Added
 
 - **Publish-ready packaging for the three client libraries** (Phase
   3.5 / step 27) — the operations bridge that makes threshold 1
-  *literal*. Until this PR, `@uniclaw/verifier`, `@uniclaw/client`,
-  and `uniclaw-client` (Python) lived only in this repo; this PR
+  *literal*. Until this PR, `@boardproof/verifier`, `@boardproof/client`,
+  and `boardproof-client` (Python) lived only in this repo; this PR
   fixes the metadata blockers so the operator can push them to npm
   and PyPI. **Zero runtime code changes** — all three library
   source trees are bit-for-bit identical to step 26.
   - **Root `package.json` (new):** declares an npm workspaces root
     spanning `packages/verifier-ts` and `packages/client-ts`. Local
-    dev resolves `@uniclaw/verifier` from the source tree via
+    dev resolves `@boardproof/verifier` from the source tree via
     symlink; publish writes the registry version. Each workspace
     package keeps its own scripts; root `npm install` populates a
     single hoisted `node_modules` (per-package `node_modules` and
     `package-lock.json` files removed).
   - **`packages/client-ts/package.json`:**
-    `"@uniclaw/verifier"` dependency changed from
+    `"@boardproof/verifier"` dependency changed from
     `"file:../verifier-ts"` to `"^0.1.0"`. Was the literal blocker
     for `npm publish` — file: deps don't translate across the
     registry. Workspaces makes the local-dev case work identically.
@@ -45,7 +146,7 @@ format change history.
     wheel and at the sdist root.
   - **`docs/steps/27-publish-clients.md`** — full operator runbook
     for npm publish + PyPI publish, including pre-flight checklist
-    (`@uniclaw` org, 2FA, API tokens), publish order (verifier
+    (`@boardproof` org, 2FA, API tokens), publish order (verifier
     before client — client depends on it on the registry), post-
     publish verification, and the version-bump policy for future
     releases.
@@ -56,15 +157,15 @@ format change history.
     exit at startup with the "refusing to expose /v1 unauthenticated"
     error. The Python bench was updated at the time but the TS bench
     wasn't. Fixed with `--bearer-token-hex` on the spawn args,
-    `bearerToken` on both `UniclawClient` instances, and
+    `bearerToken` on both `BoardProofClient` instances, and
     `Authorization: Bearer` on the raw-fetch baseline.
   - **Verification (all green; same 605-test total as pre-PR
     baseline):**
     - Rust 427 (`cargo test --workspace`).
-    - TS verifier 42 (`npm test --workspace @uniclaw/verifier`).
-    - TS client 52 with integration (`UNICLAW_INTEGRATION=1 npm test
-      --workspace @uniclaw/client`).
-    - Python 84 with integration (`UNICLAW_INTEGRATION=1 pytest` in
+    - TS verifier 42 (`npm test --workspace @boardproof/verifier`).
+    - TS client 52 with integration (`BOARDPROOF_INTEGRATION=1 npm test
+      --workspace @boardproof/client`).
+    - Python 84 with integration (`BOARDPROOF_INTEGRATION=1 pytest` in
       `packages/client-py`).
     - `npm pack --dry-run` on both TS packages: tarballs contain
       LICENSE-MIT, LICENSE-APACHE, README, `dist/`, no leaked
@@ -86,13 +187,13 @@ format change history.
     changelogs (repo-level `CHANGELOG.md` is still authoritative).
 
 - **Persistence in proposal mode** (Phase 3.5 / step 26) —
-  `uniclaw-host --constitution <path> --db <path>` now works
+  `boardproof-host --constitution <path> --db <path>` now works
   together. Proposal mode mints receipts that survive process
   restarts via `SqliteReceiptLog`. This is the **first
-  production-deployable** state for Uniclaw: restart-safe,
+  production-deployable** state for BoardProof: restart-safe,
   auth-gated (step 25), key-identified (step 19a), and persistent.
   No wire-format change — clients run unchanged.
-  - **`crates/uniclaw-host/src/api.rs`:**
+  - **`crates/boardproof-host/src/api.rs`:**
     - `ApiState<L: ReceiptLog + Send + Sync + 'static>` is now
       generic over the log type. Every `/v1` handler signature
       gains `<L>`. Existing tests (in-memory) compile unchanged —
@@ -109,7 +210,7 @@ format change history.
       Without this helper, a fresh `Kernel::new` against a
       populated DB would mint at `sequence = 0` again and the
       log would `AppendError::OutOfOrder`.
-  - **`crates/uniclaw-host/src/bin/uniclaw-host.rs`:**
+  - **`crates/boardproof-host/src/bin/boardproof-host.rs`:**
     - The `--constitution` + `--db` combination is no longer
       `bail`ed; the binary dispatches to a generic
       `serve_proposal_mode<L>` with either `InMemoryReceiptLog`
@@ -137,7 +238,7 @@ format change history.
       — `peek_issuer` reveals the original; `open` with the
       wrong pubkey fails (belt-and-suspenders).
   - **Cross-language smoke against the fresh release binary:**
-    TS 52/52 + Python 84/84 with `UNICLAW_INTEGRATION=1`. The
+    TS 52/52 + Python 84/84 with `BOARDPROOF_INTEGRATION=1`. The
     clients run unchanged — wire format identical.
   - **Bench** (`bench-results/26-proposal-mode-persistence.txt`):
     in-memory 13.3 ms/req, SQLite 7.1 ms/req (same band; cross-
@@ -166,30 +267,30 @@ format change history.
   from canonical bytes via `skip_serializing_if`). Pre-19a
   receipts re-canonicalize identically — every existing
   conformance vector still passes.
-  - **`uniclaw-receipt`:** new optional `key_id` field on
+  - **`boardproof-receipt`:** new optional `key_id` field on
     `ReceiptBody`.
-  - **`uniclaw-kernel`:** `Signer` trait gains
+  - **`boardproof-kernel`:** `Signer` trait gains
     `fn key_id(&self) -> Option<&str> { None }` (default impl
     is backward-compatible); `Kernel::mint()` threads it into the
     body.
-  - **`uniclaw-host`:** `Ed25519Signer::with_key_id(impl Into<String>)`
+  - **`boardproof-host`:** `Ed25519Signer::with_key_id(impl Into<String>)`
     + `.without_key_id()` builder methods. Existing
     `from_seed` / `new` constructors continue to produce signers
     with `key_id: None`. CLI flag `--key-id <string>` on
-    `uniclaw-host`. Server response shape
+    `boardproof-host`. Server response shape
     (`ReceiptResponse`) gains an optional `key_id` (skip-when-
     None for wire-shape backward compat).
-  - **`@uniclaw/verifier`:** `VerifyResult.keyId?: string` —
+  - **`@boardproof/verifier`:** `VerifyResult.keyId?: string` —
     populated when present in `body.key_id`. `ReceiptBody`
     interface gains `key_id?: string`.
-  - **`@uniclaw/client`:** `DecisionBase.keyId?: string` —
+  - **`@boardproof/client`:** `DecisionBase.keyId?: string` —
     threaded from the server's wire response into every
     `Decision` variant (allowed / denied / approved / pending).
-  - **`uniclaw-client` (Python):** `_DecisionBase.key_id: str |
+  - **`boardproof-client` (Python):** `_DecisionBase.key_id: str |
     None` and `VerifyResult.key_id: str | None`. Both populated
     when the server / signed body carries the field.
   - **Conformance fixture extended.** Two new vectors in
-    `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`:
+    `crates/boardproof-receipt/tests/vectors/canonical-v2.json`:
     `with-key-id-prod-2026` (Allowed + `body.key_id =
     "prod-2026"`) and `tool-execution-with-key-id-hsm-3`
     (`$kernel/tool/executed` + `body.key_id = "hsm-3"` + a
@@ -230,12 +331,12 @@ format change history.
 - **Bearer-token authentication on `/v1`** (Phase 3.5 / step 25)
   — retires the long-standing "WARN /v1 proposal API is
   unauthenticated" tech debt from step 21. The proposal API is no
-  longer accidentally exposable: `uniclaw-host --constitution`
+  longer accidentally exposable: `boardproof-host --constitution`
   refuses to start without an explicit auth choice (one of
   `--bearer-token-hex` / `--insecure-no-auth`). Read-only routes
   (`/receipts/<hash>`, `/verify`, `/healthz`, `/`) stay public —
   the cold-verify trust property depends on it.
-  - **Server (`crates/uniclaw-host/src/api.rs`):**
+  - **Server (`crates/boardproof-host/src/api.rs`):**
     - New `AuthConfig` type with two constructors:
       `AuthConfig::with_token(Vec<u8>)` (enforces 32 bytes; returns
       `AuthConfigError::WrongLength` otherwise) and
@@ -249,7 +350,7 @@ format change history.
       compares via constant-time `ct_eq` helper, and returns 401
       with the standard `{error: "unauthorized", detail: "..."}`
       JSON body on any failure.
-  - **Binary (`bin/uniclaw-host.rs`):**
+  - **Binary (`bin/boardproof-host.rs`):**
     - `--bearer-token-hex <64-hex>` accepts the 32-byte token.
     - `--insecure-no-auth` explicitly opts out (mutually exclusive
       with the token flag; bail if both set).
@@ -257,14 +358,14 @@ format change history.
       one of the two flags. Insecure exposure is now a deliberate
       typed choice in the deploy artifact, not a logged warning.
   - **TypeScript client (`packages/client-ts`):**
-    - New `bearerToken?: string` option on `UniclawClientOptions`.
+    - New `bearerToken?: string` option on `BoardProofClientOptions`.
     - New private `#v1PostHeaders()` helper attaches
       `Authorization: Bearer <hex>` on every `/v1` POST when set;
       `getReceipt` and `verifyReceiptUrl` deliberately omit it
       (read paths stay public by design).
   - **Python client (`packages/client-py`):**
     - New `bearer_token: str | None = None` keyword argument on
-      `UniclawClient`. New private `_v1_post_headers()` mirrors
+      `BoardProofClient`. New private `_v1_post_headers()` mirrors
       the TS surface. mypy strict clean.
   - **Tests (33 new across three suites; 542 passing in total):**
     - **Rust (`tests/api.rs`, 10 new):** 401 on missing header,
@@ -299,37 +400,37 @@ format change history.
     - Token rotation API (restart with a new token).
     - mTLS / OAuth2 / OIDC (operators use a reverse proxy).
 
-- **`uniclaw-client` Python SDK** (Phase 3.5 / step 24) — new
+- **`boardproof-client` Python SDK** (Phase 3.5 / step 24) — new
   top-level `packages/client-py/` (third packaging unit;
   Rust workspace stays at 17 of 20). **Fully closes
   success threshold 1 (portability)** from the deep-strategy
   memory: TS dev + Python dev can both `pip`/`npm install` and
-  verify a Uniclaw receipt minted on a Rust kernel. Three-language
+  verify a BoardProof receipt minted on a Rust kernel. Three-language
   byte-identity proven against the same `canonical-v2.json`
   fixture Rust and TS use.
   - **One class, four operations, verify-by-default**, mirroring
     the TS client but adapted to Python idioms (frozen
     dataclasses, structural pattern matching, snake_case API):
-    - `UniclawClient.evaluate(action)` → `POST /v1/proposals`.
+    - `BoardProofClient.evaluate(action)` → `POST /v1/proposals`.
       Returns a discriminated union — match on `decision.kind`
       (`"allowed" | "denied" | "approved" | "pending"`).
-    - `UniclawClient.resolve_approval(content_id, principal=..., outcome=...)`
+    - `BoardProofClient.resolve_approval(content_id, principal=..., outcome=...)`
       → `POST /v1/approvals/{id}/resolve`.
-    - `UniclawClient.record_tool_execution(allowed_receipt_id=..., …)`
+    - `BoardProofClient.record_tool_execution(allowed_receipt_id=..., …)`
       → `POST /v1/tool-executions` (step 23 surface). Accepts
       optional `secrets_used: Iterable[str]` and
       `redaction: Redaction` arguments; absent fields are omitted
       from the wire body.
-    - `UniclawClient.verify_receipt_url(url)` and
-      `UniclawClient.get_receipt(content_id)`.
+    - `BoardProofClient.verify_receipt_url(url)` and
+      `BoardProofClient.get_receipt(content_id)`.
   - **Standalone verifier helpers** usable without a client:
     `canonicalize`, `compute_content_id_bytes`,
     `compute_content_id_hex`, `verify_receipt`,
     `verify_receipt_json`, `verify_receipt_url`. Compliance
-    audit scripts can `from uniclaw_client import verify_receipt_url`
+    audit scripts can `from boardproof_client import verify_receipt_url`
     and walk a list of URLs without any HTTP-client wiring.
-  - **Typed errors.** `UniclawError(status, code, detail)` and
-    `UniclawVerifyError(content_id, detail)`. Branch on either
+  - **Typed errors.** `BoardProofError(status, code, detail)` and
+    `BoardProofVerifyError(content_id, detail)`. Branch on either
     safely.
   - **Two production dependencies, audited and minimal:**
     - `PyNaCl` (Ed25519, libsodium binding)
@@ -340,7 +441,7 @@ format change history.
     - `test_canonical.py` (12) — JCS unit tests mirroring the
       Rust + TS suites.
     - `test_conformance.py` (11) — **cross-language conformance**
-      against `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`.
+      against `crates/boardproof-receipt/tests/vectors/canonical-v2.json`.
       Loads the SAME fixture the Rust snapshot test loads.
       Asserts byte-identical canonical bytes + BLAKE3 content_ids
       for all 5 vectors. **22 cross-language assertions total
@@ -351,12 +452,12 @@ format change history.
     - `test_client.py` (19) — unit tests with mocked `urlopen`:
       wire shape, decision narrowing, redaction camelCase ↔
       snake_case, 400/404/409 mapping, baseUrl normalization.
-    - `test_integration.py` (10, opt-in via `UNICLAW_INTEGRATION=1`)
-      — drives a live `uniclaw-host` subprocess through every
+    - `test_integration.py` (10, opt-in via `BOARDPROOF_INTEGRATION=1`)
+      — drives a live `boardproof-host` subprocess through every
       decision class + the tool-execution surface. Includes a
       **tamper test** that intercepts the receipt GET, mutates
       one body field, and confirms verify-by-default raises
-      `UniclawVerifyError` before the decision returns.
+      `BoardProofVerifyError` before the decision returns.
   - **mypy strict clean** across all 7 source files
     (`strict = true`, `disallow_untyped_defs = true`).
   - **Bench** (`bench-results/24-python-client.txt`):
@@ -372,18 +473,18 @@ format change history.
       Same bytes; faster verify.
   - **What this step does NOT ship:**
     - Actual `python -m build && twine upload` to PyPI (operations
-      task; one command once the `uniclaw-client` namespace is
+      task; one command once the `boardproof-client` namespace is
       reserved).
     - Async I/O variant — sync first; `aiohttp`-based sibling can
       land later. Same trust model, different transport.
     - Go / Swift / Java siblings — each conforms to the same wire
       format; each is its own step.
-    - A bundled CLI (`uniclaw-verify-py`). The package focuses on
+    - A bundled CLI (`boardproof-verify-py`). The package focuses on
       library use; a CLI can land as a follow-up.
 
 - **Tool-execution API** (Phase 3.5 / step 23) —
-  `POST /v1/tool-executions` on `uniclaw-host`, plus
-  `client.recordToolExecution(...)` on `@uniclaw/client`. Closes
+  `POST /v1/tool-executions` on `boardproof-host`, plus
+  `client.recordToolExecution(...)` on `@boardproof/client`. Closes
   the half-shipped integration story from steps 21+22: every
   step of an agent action is now anchorable from any non-Rust
   runtime, with no embedded kernel.
@@ -401,7 +502,7 @@ format change history.
     kernel collapses them into one event with optional fields.
     Standalone `/v1/secret-uses` / `/v1/redactions` endpoints
     can land later if a detached-event use case appears.
-  - **Server side** (`crates/uniclaw-host/src/api.rs`): new
+  - **Server side** (`crates/boardproof-host/src/api.rs`): new
     `post_tool_execution` handler. Looks up the Allowed receipt,
     rejects 400 on missing/both-set output_hash/error, 404 on
     unknown id, 409 on non-Allowed receipt or non-`tool.*`
@@ -413,19 +514,19 @@ format change history.
     re-verifies every gate (signature, issuer, decision-is-Allowed,
     action-match) before minting.
   - **Client side** (`packages/client-ts/src/client.ts`): new
-    `UniclawClient.recordToolExecution(input, opts?)` method.
+    `BoardProofClient.recordToolExecution(input, opts?)` method.
     Returns `AllowedDecision` (the receipt is an audit anchor,
     not a new access-control decision; always `decision: "allowed"`).
     Verify-by-default applies the same way as `evaluate()`.
     Wire-shape conversion (camelCase ↔ snake_case) happens at
     the boundary; absent optional fields are omitted from the
     wire body.
-  - **New types in `@uniclaw/client`:** `ToolExecutionInput`,
+  - **New types in `@boardproof/client`:** `ToolExecutionInput`,
     `RedactionReportInput`, `RuleMatchInput`. Re-exported from
     `index.ts`.
   - **Tests:**
     - **10 new Rust integration tests** in
-      `crates/uniclaw-host/tests/api.rs`: success path with chain
+      `crates/boardproof-host/tests/api.rs`: success path with chain
       linkage assertion (`prev_hash` of execution =
       `leaf_hash` of allowed); `secrets_used` emits one
       `secret_used` edge per name; `redaction` populates
@@ -460,40 +561,40 @@ format change history.
     `/v1/secret-uses` / `/v1/redactions` endpoints; chain-
     checkpoint endpoint (queued as step 19c); authentication.
 
-- **`@uniclaw/client` TypeScript SDK** (Phase 3.5 / step 22)
+- **`@boardproof/client` TypeScript SDK** (Phase 3.5 / step 22)
   — new top-level `packages/client-ts/` (second JS/TS package;
   workspace stays at 17 of 20 Rust crates). The on-ramp for any
   non-Rust runtime that wants to anchor agent actions into
-  Uniclaw receipts: wraps the step-21 HTTP API + step-20a
+  BoardProof receipts: wraps the step-21 HTTP API + step-20a
   verifier into one idiomatic TypeScript surface. **First
   concrete cross-claw adapter ships**; OpenClaw-, NemoClaw-, or
   any TS-runtime-style integration is now one `npm install` +
   one `await client.evaluate(action)`.
   - **One class, three operations, verify-by-default:**
-    - `UniclawClient.evaluate(action)` → `POST /v1/proposals`.
+    - `BoardProofClient.evaluate(action)` → `POST /v1/proposals`.
       Returns a discriminated union — switch on `decision.kind`
       ("allowed" / "denied" / "approved" / "pending") and
       TypeScript narrows the rest. Pending decisions carry
       `.approve(principal)` / `.deny(principal)` callbacks.
-    - `UniclawClient.resolveApproval(contentId, {principal, outcome})`
+    - `BoardProofClient.resolveApproval(contentId, {principal, outcome})`
       → `POST /v1/approvals/{id}/resolve`. Async path for when
       the operator response arrives via Slack / email / a
       dashboard, after the original mint's hot path is gone.
-    - `UniclawClient.verifyReceiptUrl(url)` re-exports the verify
-      path from `@uniclaw/verifier`.
-    - `UniclawClient.getReceipt(contentId)` returns the parsed
+    - `BoardProofClient.verifyReceiptUrl(url)` re-exports the verify
+      path from `@boardproof/verifier`.
+    - `BoardProofClient.getReceipt(contentId)` returns the parsed
       receipt JSON without verifying — pair with explicit
       `verifyReceiptUrl` when you want the signature check.
   - **Verify-by-default.** Every mint is verified locally before
     being returned: the client fetches the full receipt, runs
     the JCS canonicalizer + BLAKE3 + Ed25519, AND compares the
     recomputed `content_id` against the server's claimed
-    `content_id`. If anything fails, `UniclawVerifyError` is
+    `content_id`. If anything fails, `BoardProofVerifyError` is
     thrown. Override per-call (`{verify: false}`) or globally
-    (`new UniclawClient({verifyByDefault: false})`).
-  - **Typed errors.** `UniclawError` carries `status` (HTTP
+    (`new BoardProofClient({verifyByDefault: false})`).
+  - **Typed errors.** `BoardProofError` carries `status` (HTTP
     code) + `code` (`"bad_request"` / `"not_found"` / `"conflict"`
-    / ...) + `detail`. `UniclawVerifyError` carries the receipt's
+    / ...) + `detail`. `BoardProofVerifyError` carries the receipt's
     content_id + the failure reason. Callers can branch on either
     safely.
   - **Tests (24 total):**
@@ -503,14 +604,14 @@ format change history.
       status codes, verify opt-out, baseUrl normalization,
       `getReceipt`.
     - `tests/integration.test.ts` — **7 integration tests**
-      against a live `uniclaw-host` subprocess (opt-in via
-      `UNICLAW_INTEGRATION=1`). Drives Allowed / Pending →
+      against a live `boardproof-host` subprocess (opt-in via
+      `BOARDPROOF_INTEGRATION=1`). Drives Allowed / Pending →
       Approved / Pending → Denied / Denied flows; asserts
       chain linkage (`prev_hash` of approved equals `leaf_hash`
       of pending); 4xx/5xx error surfacing. **Includes a tamper
       test** that intercepts the `GET /receipts/<hash>`
       response, mutates one field of the body, and confirms
-      `verify-by-default` rejects with `UniclawVerifyError`
+      `verify-by-default` rejects with `BoardProofVerifyError`
       before the caller sees the decision.
   - **Bench (gitignored at `bench-results/22-typescript-client.txt`):**
     - `client.evaluate verify=true`  — **19.3 ms/req**
@@ -524,7 +625,7 @@ format change history.
       extend step 21 to return the full Receipt in the propose
       response and roughly halve the verify=true cost.
   - **Two dependencies, both from the existing ecosystem:**
-    `@uniclaw/verifier` (workspace local; brings in
+    `@boardproof/verifier` (workspace local; brings in
     `@noble/curves` + `@noble/hashes` transitively). No new
     surface to audit.
   - **What this step does NOT ship:** support for the
@@ -537,14 +638,14 @@ format change history.
     siblings (queued as steps 22a / 22b / 22c — each conforms to
     the same wire format).
 
-- **HTTP proposal API on `uniclaw-host`** (Phase 3.5 / step 21)
+- **HTTP proposal API on `boardproof-host`** (Phase 3.5 / step 21)
   — opt-in proposal/approval surface that mounts at `/v1` when the
   binary is started with `--constitution <path>`. Ships the
   **threshold-3 lever** from the deep-strategy memory: any language
-  that speaks HTTP can now produce verifiable Uniclaw receipts via
+  that speaks HTTP can now produce verifiable BoardProof receipts via
   the local-sidecar integration pattern from the war analysis — no
   Rust toolchain, no kernel embedding required. Pairs with
-  `@uniclaw/verifier` (step 20a) to give every non-Rust claw both
+  `@boardproof/verifier` (step 20a) to give every non-Rust claw both
   the production path (sidecar mints) and the consumption path
   (TS verifier validates).
   - **Endpoints (this PR):**
@@ -559,37 +660,37 @@ format change history.
       match, decision-is-Pending, action match).
     - Read-only routes (`/receipts/<hash>`, `/verify`, `/healthz`,
       `/`) are unchanged.
-  - **`crates/uniclaw-host/src/api.rs`** (~370 LOC) — `ApiState`
+  - **`crates/boardproof-host/src/api.rs`** (~370 LOC) — `ApiState`
     (concrete `Kernel<Ed25519Signer, SystemClock, InMemoryConstitution>`
     + shared `Arc<RwLock<InMemoryReceiptLog>>` with the read-only
     routes), `api_router()`, handlers, `ApiError → IntoResponse`
     mapping (400/404/409/500).
-  - **`crates/uniclaw-host/src/signer.rs`** — reusable
+  - **`crates/boardproof-host/src/signer.rs`** — reusable
     `Ed25519Signer` wrapper around `ed25519_dalek::SigningKey`
     implementing the kernel's `Signer` trait. Extracted from the
     end-to-end demo so future binaries don't redefine it.
-  - **`crates/uniclaw-host/src/clock.rs`** — `SystemClock`
+  - **`crates/boardproof-host/src/clock.rs`** — `SystemClock`
     (production wall-clock) + `StubClock` (deterministic, tests),
     both emitting RFC 3339 UTC seconds (`YYYY-MM-DDTHH:MM:SSZ`)
     via an inline `civil_from_days` formatter (Howard Hinnant's
     public-domain algorithm; no external date dependency).
-  - **`bin/uniclaw-host.rs`** gains `--constitution <path>`,
+  - **`bin/boardproof-host.rs`** gains `--constitution <path>`,
     `--signer-seed-hex <64-hex>`. Presence of `--constitution`
     enables proposal mode; absence preserves the prior step-9
     read-only behavior. A startup `WARN` flags that `/v1` is
     unauthenticated.
-  - **`uniclaw-kernel` / `uniclaw-constitution` / `uniclaw-approval`
+  - **`boardproof-kernel` / `boardproof-constitution` / `boardproof-approval`
     / `ed25519-dalek` move from dev-deps to regular deps** in
-    `uniclaw-host`. The end-to-end demo's remaining dev-deps
-    (`uniclaw-tools` / `uniclaw-tools-http` / `uniclaw-secrets` /
-    `uniclaw-redact` / `base64`) stay dev-only.
+    `boardproof-host`. The end-to-end demo's remaining dev-deps
+    (`boardproof-tools` / `boardproof-tools-http` / `boardproof-secrets` /
+    `boardproof-redact` / `base64`) stay dev-only.
   - **Concurrency:** `kernel: std::sync::Mutex<...>` (short, sync
     critical section; no `.await` inside) + `log:
     Arc<tokio::sync::RwLock<...>>` (shared with read-only routes,
     async multi-reader). Lock order: kernel → log; never the
     reverse.
   - **Tests:** 11 new integration tests in
-    `crates/uniclaw-host/tests/api.rs` covering happy paths
+    `crates/boardproof-host/tests/api.rs` covering happy paths
     (allowed / denied / pending → approved / pending → denied),
     error paths (malformed JSON / bad hex / unknown content_id /
     resolving an Allowed receipt → 409), and chain linkage
@@ -599,7 +700,7 @@ format change history.
     1969-12-31 plus assert `SystemClock` emits 20-char
     well-formed strings.
   - **End-to-end cross-language smoke against the live binary.**
-    Ran `target/release/uniclaw-host --constitution ... --signer-seed-hex
+    Ran `target/release/boardproof-host --constitution ... --signer-seed-hex
     2a*32 --bind 127.0.0.1:0`, submitted Allowed / Pending /
     Approved / Denied via curl, then verified each receipt URL via
     `node bin/verify-cli.mjs`. 4 of 4 verify; tamper test (flip
@@ -626,17 +727,17 @@ format change history.
     client SDK in TS/Python/Go (the endpoints are simple enough
     that any HTTP client works).
 
-- **TypeScript verifier npm package — `@uniclaw/verifier`**
+- **TypeScript verifier npm package — `@boardproof/verifier`**
   (Phase 3.5 / step 20a) — first non-Rust verifier in the repo,
   shipping at `packages/verifier-ts/`. Workspace stays at 17 of
   20 Rust crates (the npm package doesn't count toward the cap).
   Per the war analysis: *"if verification is not universal,
-  Uniclaw stays a Rust project. If verification is universal,
-  Uniclaw becomes a protocol."* This PR makes verification
+  BoardProof stays a Rust project. If verification is universal,
+  BoardProof becomes a protocol."* This PR makes verification
   programmatically universal — closes **success threshold 1
   (portability)** from the deep-strategy memory: a TypeScript
   developer can `npm install` a verifier and validate a
-  Uniclaw receipt minted on a Rust kernel, with bytes matching,
+  BoardProof receipt minted on a Rust kernel, with bytes matching,
   on any platform that runs Node 20+ or a modern browser.
   - **Package surface (~250 LOC across 6 modules):**
     - `canonicalizeBody(body)` / `canonicalizeJcs(value)` — RFC
@@ -659,26 +760,26 @@ format change history.
       dependencies — both audited Paul-Miller libraries with
       no native modules and no postinstall scripts.
   - **Tiny CLI** (`bin/verify-cli.mjs`) registered as
-    `uniclaw-verify-ts`. Accepts a URL or a local JSON file
+    `boardproof-verify-ts`. Accepts a URL or a local JSON file
     path; exit code 0 on verified, 1 on failure, 2 on bad input.
     Pairs with the step-20 demo:
-    `npx uniclaw-verify-ts http://127.0.0.1:PORT/receipts/HASH`
+    `npx boardproof-verify-ts http://127.0.0.1:PORT/receipts/HASH`
     → `✓ verified | issuer=197f6b23... decision=allowed schema_v=2 content_id=a957e6e6...`.
   - **34 tests pass** across 3 files
     (`canonical.test.ts` + `conformance.test.ts` + `verify.test.ts`):
     - 10 JCS primitive/string/container unit tests.
     - **10 cross-language conformance assertions** that load
-      the SAME `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`
+      the SAME `crates/boardproof-receipt/tests/vectors/canonical-v2.json`
       fixture the Rust snapshot test loads. All 5 vectors
       produce byte-identical canonical output and byte-identical
       BLAKE3 content_ids in the TS port. Same fixture is the
       single source of truth across all three implementations
       (Rust canonicalizer, browser verifier JS port,
-      `@uniclaw/verifier`).
+      `@boardproof/verifier`).
     - 13 sign+verify roundtrip + tamper-detection tests using
       the demo's deterministic key seed (`[42u8; 32]`).
   - **End-to-end smoke against the live demo:** ran
-    `cargo run --release --example end-to-end-demo -p uniclaw-host`,
+    `cargo run --release --example end-to-end-demo -p boardproof-host`,
     fetched each of the 6 published receipts via
     `verifyReceiptUrl`. **6 of 6 verify**; the recomputed
     `content_id` byte-matches the URL hash for every receipt;
@@ -686,8 +787,8 @@ format change history.
     rejected with `signature did not verify under the embedded
     issuer key`.
   - **Conformance test path** is the lockstep mechanism between
-    `crates/uniclaw-receipt/src/canonical.rs`,
-    `crates/uniclaw-host/src/verify.html`, and
+    `crates/boardproof-receipt/src/canonical.rs`,
+    `crates/boardproof-host/src/verify.html`, and
     `packages/verifier-ts/`. Any change to one canonicalizer
     that alters bytes for the same logical body fails in
     Rust's snapshot test AND in vitest. Comment added to
@@ -718,14 +819,14 @@ format change history.
   — one runnable artifact that wires Phase 3's complete stack
   (kernel + constitution + budget + approval + HTTP fetch tool +
   secret broker + redactor + canonical receipts) into one
-  command. `cargo run --release --example end-to-end-demo -p uniclaw-host`
+  command. `cargo run --release --example end-to-end-demo -p boardproof-host`
   walks 5 representative actions, prints 6 verifiable receipt
-  URLs, and spins up `uniclaw-host` serving every receipt at
+  URLs, and spins up `boardproof-host` serving every receipt at
   `/receipts/<hash>` plus the browser verifier at `/verify`.
   Closes **success threshold 2 (visibility)** from the deep-
   strategy memory: a third party can run the demo, paste any
   printed URL into `/verify`, and watch the trust property work
-  cold — no Uniclaw install required for the verifier, since
+  cold — no BoardProof install required for the verifier, since
   the JS port of JCS + `crypto.subtle.verify` runs in the
   browser. Per the war analysis: *"the demo should be brutally
   concrete: agent proposes risky action → constitution requires
@@ -733,7 +834,7 @@ format change history.
   broker without exposing raw material → output redacted →
   receipt chain published → third party verifies it from another
   machine."* All seven steps in one binary.
-  - **`crates/uniclaw-host/examples/end-to-end-demo.rs`** (~580
+  - **`crates/boardproof-host/examples/end-to-end-demo.rs`** (~580
     LOC, intentional single-function `main` with `#[allow(clippy::too_many_lines)]`
     — the storyline is the value, not the modularity). Five
     actions:
@@ -766,7 +867,7 @@ format change history.
     injected `Authorization`), `/api/dump` (returns the leak-
     shaped body for the redaction step). Stop-flag for graceful
     shutdown. No real network calls; no flakiness from external
-    services. Pattern matches `crates/uniclaw-tools-http/tests/integration.rs`
+    services. Pattern matches `crates/boardproof-tools-http/tests/integration.rs`
     (which we wrote ourselves — see step 14).
   - **Deterministic Ed25519 signing key** (`SigningKey::from_bytes(&[42u8; 32])`)
     so the demo's issuer public key is stable across runs.
@@ -783,10 +884,10 @@ format change history.
     the step proves, where it fits, how it works in plain
     words, design choices, what it doesn't ship, performance/
     size, and the threshold-2 closure.
-  - **`uniclaw-host` Cargo.toml** dev-deps: `uniclaw-kernel`,
-    `uniclaw-constitution`, `uniclaw-approval`, `uniclaw-store`,
-    `uniclaw-tools`, `uniclaw-tools-http`, `uniclaw-secrets`,
-    `uniclaw-redact`, `base64`. Dev-only because the host crate
+  - **`boardproof-host` Cargo.toml** dev-deps: `boardproof-kernel`,
+    `boardproof-constitution`, `boardproof-approval`, `boardproof-store`,
+    `boardproof-tools`, `boardproof-tools-http`, `boardproof-secrets`,
+    `boardproof-redact`, `base64`. Dev-only because the host crate
     itself doesn't depend on these in production. New `[[example]]`
     entry pins the example path.
   - **No new crate** — workspace stays at 17 of 20 crates.
@@ -806,15 +907,15 @@ format change history.
   This is the foundation for cross-language verifier
   interoperability — per the war analysis (`UNICLAW_CLAW_WAR_ANALYSIS.md`),
   the highest-leverage work: *"if verification is not universal,
-  Uniclaw stays a Rust project. If verification is universal,
-  Uniclaw becomes a protocol."* The receipt is now portable.
-  - **`uniclaw-receipt::canonical` module** — RFC 8785 JCS
+  BoardProof stays a Rust project. If verification is universal,
+  BoardProof becomes a protocol."* The receipt is now portable.
+  - **`boardproof-receipt::canonical` module** — RFC 8785 JCS
     implementation (~100 LOC). Goes through
     `serde_json::to_value` for the intermediate Value tree,
     walks emitting canonical bytes:
     - Object keys sorted by UTF-16 code unit order.
     - Integers as decimal (no leading zeros, no `+`, no
-      exponent). Floats panic — Uniclaw's schema has no
+      exponent). Floats panic — BoardProof's schema has no
       floats; the panic is a load-bearing assertion against
       future drift.
     - Standard string escapes (`"` → `\"`, `\\` → `\\\\`,
@@ -832,7 +933,7 @@ format change history.
     `crypto::sign` / `crypto::verify`. Backwards-compatible:
     every existing receipt verifies; new receipts verify in
     any JCS-conformant implementation.
-  - **5 test vectors at `crates/uniclaw-receipt/tests/vectors/canonical-v2.json`**
+  - **5 test vectors at `crates/boardproof-receipt/tests/vectors/canonical-v2.json`**
     — minimal-allowed, denied-with-rule, with-provenance-edges,
     with-redactor-stack-hash, pending-approval. Each fixture
     pins `canonical_hex` (the canonical bytes) + `blake3_hex`
@@ -840,18 +941,18 @@ format change history.
     (`vectors_match_expected_canonical_and_hash`) fails any
     change to `canonical.rs` that alters byte-level output
     for the same logical body.
-  - **Browser verifier (`crates/uniclaw-host/src/verify.html`)**
+  - **Browser verifier (`crates/boardproof-host/src/verify.html`)**
     updated with a JS port of the canonicalizer (~30 LOC).
     Dispatches on `body.schema_version`: v1 receipts use the
     pre-step-19 `JSON.stringify` path, v2 receipts use the JCS
     JS port. Same algorithm; same output.
   - **Node.js cross-language conformance smoke**
-    (`crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs`).
+    (`crates/boardproof-receipt/tests/vectors/conformance-smoke.mjs`).
     Loads `canonical-v2.json` and re-canonicalizes every body
     with a JS JCS implementation matching the one in
     `verify.html`. **5 of 5 vectors pass** — byte-identical
     output to Rust. Run manually:
-    `node crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs`.
+    `node crates/boardproof-receipt/tests/vectors/conformance-smoke.mjs`.
     Future-step CI integration could wire this into a Node
     setup.
   - **RFC-0001 updated** to `Schema version: 2` with a new
@@ -892,7 +993,7 @@ format change history.
   output sanitization produces a new audit primitive that
   maps directly to the war-analysis "redaction receipts"
   claim, while step 17 adds dep weight on a non-strategic axis.
-  - **New `uniclaw-redact` crate** (workspace member 17).
+  - **New `boardproof-redact` crate** (workspace member 17).
     - `Redactor` trait + `RedactionResult` (redacted bytes
       for the caller + report for the kernel) + `id()` for
       stable identification in audit edges.
@@ -919,12 +1020,12 @@ format change history.
       non-UTF-8 input, stack hash stability + variance, stack
       composition, stack_hash uses redactor IDs not pointer
       identity, stack `redact()` returns matching `stack_hash`).
-  - **`uniclaw-receipt` audit-data types**: `RedactionReport
+  - **`boardproof-receipt` audit-data types**: `RedactionReport
     { redacted_output_hash, matches: Vec<RuleMatch>, stack_hash }`
     and `RuleMatch { rule_id, count }`. `no_std`-compatible
     so the kernel can read them. The trait + impls live in
-    `uniclaw-redact` (`std`); the kernel-side audit data lives
-    in `uniclaw-receipt` (`no_std`). Same split as
+    `boardproof-redact` (`std`); the kernel-side audit data lives
+    in `boardproof-receipt` (`no_std`). Same split as
     `ToolMetadata`.
   - **Kernel integration**: `ToolExecution.redaction:
     Option<RedactionReport>` field. When present, the kernel:
@@ -980,7 +1081,7 @@ format change history.
   check secret existence, log, and read the clock through the
   *same* machinery native tools use, with the *same* receipt-
   format guarantees the kernel mints for native tools.
-  - Extended `crates/uniclaw-tools-wasm/wit/tool.wit` with a
+  - Extended `crates/boardproof-tools-wasm/wit/tool.wit` with a
     new `host` interface containing four functions:
     - `log-message(level, message)` — structured logging,
       rate-limited host-side (1000 entries / 4 KiB per message;
@@ -1060,9 +1161,9 @@ format change history.
     combining limiter + WasiCtx + Host trait impl into one
     type; IronClaw's rate-limit constants. No source borrowed;
     citations live in `wit/tool.wit`, `src/lib.rs`, `src/host.rs`.
-  - New workspace deps in `uniclaw-tools-wasm`:
-    `uniclaw-tools-http` (the host's `http-fetch` shim
-    delegates to `HttpFetchTool::call`), `uniclaw-secrets`
+  - New workspace deps in `boardproof-tools-wasm`:
+    `boardproof-tools-http` (the host's `http-fetch` shim
+    delegates to `HttpFetchTool::call`), `boardproof-secrets`
     (for the `SecretBroker` trait passed to the constructor),
     `serde` + `serde_json` (the host bridge round-trips
     through `HttpFetchInput`/`HttpFetchOutput` JSON because
@@ -1089,13 +1190,13 @@ format change history.
   and the host drives them through `wasmtime::component::bindgen!`-
   generated bindings instead of the packed-i64 trick from 16a.
   Both paths coexist behind the same `Tool` trait; tools choose.
-  - `crates/uniclaw-tools-wasm/wit/tool.wit` defines
-    `uniclaw:tool@0.1.0` with a single interface `tool-api`
+  - `crates/boardproof-tools-wasm/wit/tool.wit` defines
+    `boardproof:tool@0.1.0` with a single interface `tool-api`
     exporting `call: func(input: list<u8>) -> result<list<u8>,
     string>`. The world `tool` exports `tool-api` and imports
     nothing — host imports land in 16c via a separate
     `tool-with-host` world.
-  - `crates/uniclaw-tools-wasm/src/bindings.rs` invokes
+  - `crates/boardproof-tools-wasm/src/bindings.rs` invokes
     `wasmtime::component::bindgen!` to generate the host
     bindings. Guarded with module-level allow-lints because the
     generator's emitted code triggers pedantic warnings that
@@ -1107,7 +1208,7 @@ format change history.
     `Tool::call` dispatches based on what the constructor
     recorded.
   - The Component path uses `bindings::Tool::instantiate(...)`
-    + `instance.uniclaw_tool_tool_api().call_call(...)`. The
+    + `instance.boardproof_tool_tool_api().call_call(...)`. The
     canonical ABI handles host↔guest memory ownership (no more
     `alloc`/packed-i64 plumbing). Guest-arm `Err(string)`
     surfaces as `ToolError::Failed("guest: <msg>")`; sandbox
@@ -1122,14 +1223,14 @@ format change history.
     single source of truth for tests; reviewers can rebuild
     locally to verify.
   - **`wasmtime-wasi` dep** added to the workspace and to
-    `uniclaw-tools-wasm`. A Rust→WASM Component built against
+    `boardproof-tools-wasm`. A Rust→WASM Component built against
     `wasm32-wasip2` automatically declares WASI imports
     regardless of whether it touches them; without those
     imports satisfied on the host, instantiation fails. We
     register an empty WASI context per call (no preopens, no
     env, no stdio passthrough) — strictly to make the imports
     linkable, not to grant any capability. Step 16c replaces
-    this with capability-checked Uniclaw imports.
+    this with capability-checked BoardProof imports.
   - `MemoryLimiter` retired; replaced with `StoreData` that
     holds the memory cap PLUS the WASI ctx + resource table.
     Same per-call freshness guarantee — each call gets its
@@ -1166,7 +1267,7 @@ format change history.
     internal swaps that can land additively.
   - **Step doc** —
     [`docs/steps/16b-wasm-component-model.md`](docs/steps/16b-wasm-component-model.md).
-- **`uniclaw-tools-wasm` crate** — sandboxed Tool runtime backed by
+- **`boardproof-tools-wasm` crate** — sandboxed Tool runtime backed by
   wasmtime (Phase 3 step 4 / step 16a). Workspace member 16. The
   third real `Tool` implementation, validating the trait surface
   (and `ToolError::Timeout` in particular) against arbitrary
@@ -1234,7 +1335,7 @@ format change history.
     Component Model, persistent compile cache, async, multi-tenant
     accounting), and the rationale for splitting step 16 into
     three PRs.
-- **`uniclaw-secrets` crate** — typed surface for credential injection
+- **`boardproof-secrets` crate** — typed surface for credential injection
   (Phase 3 step 3 / step 15). Workspace member 15.
   - `SecretValue` — drop-zeroizing buffer (via the `zeroize` crate),
     redacted Debug (`SecretValue([REDACTED, len=N])`), no `Display`,
@@ -1264,7 +1365,7 @@ format change history.
     drop-zeroing discipline. The `zeroize` crate is the only new
     runtime dependency.
 - **`HttpFetchTool` authentication** (Phase 3 step 15, in
-  `uniclaw-tools-http`).
+  `boardproof-tools-http`).
   - Three new constructors: `with_broker(allowed_hosts, broker)`,
     `with_broker_and_config(allowed_hosts, broker, config)`, plus a
     `has_broker()` accessor. `with_allowlist` and `with_config` keep
@@ -1287,7 +1388,7 @@ format change history.
     block. Test
     `authenticated_request_injects_authorization_bearer_header`
     asserts the header reaches the wire with the expected value.
-- **`ToolOutput::metadata`** (`uniclaw-tools`). New
+- **`ToolOutput::metadata`** (`boardproof-tools`). New
   `ToolMetadata { secrets_used: Vec<String> }` field. Carries the
   *reference names* of secrets a tool consumed during a call; values
   never appear here. Backwards-compatible additive change — a tool
@@ -1319,7 +1420,7 @@ format change history.
   provenance, sanitization of secrets out of tool output bodies — all
   on the future-step list).
 
-- **`uniclaw-tools-http` crate** — first real tool implementation
+- **`boardproof-tools-http` crate** — first real tool implementation
   (Phase 3 step 2 / step 14). Workspace member 14. Validates the
   trait surface from step 13 against actual network code, with three
   defenses wired in.
@@ -1335,7 +1436,7 @@ format change history.
   - **SSRF defense**: literal-IP requests to private / loopback /
     link-local / multicast / reserved / IPv4-mapped-IPv6 ranges are
     refused by default. RFC-cited table in
-    `uniclaw-tools-http/src/ssrf.rs`. Production config has
+    `boardproof-tools-http/src/ssrf.rs`. Production config has
     `allow_private_ips: false`; tests use
     `HttpFetchConfig::for_test_localhost()` for `127.0.0.1`.
   - **Bounded read**: `max_response_bytes` (default 10 MiB) enforced
@@ -1346,22 +1447,22 @@ format change history.
     decides whether to follow (and that follow goes through the
     capability allowlist again).
   - Configurable timeout (default 30 s), fixed User-Agent
-    `uniclaw-tools-http/<version>`.
-- **`uniclaw-tools::Capability::is_granted_by(&[Capability], &Capability) -> bool`**
+    `boardproof-tools-http/<version>`.
+- **`boardproof-tools::Capability::is_granted_by(&[Capability], &Capability) -> bool`**
   helper — small additive to the existing crate. Other tool crates
-  (next: `uniclaw-tools-fs`, `uniclaw-tools-shell`, …) will use the
+  (next: `boardproof-tools-fs`, `boardproof-tools-shell`, …) will use the
   same gate.
-- 45 new tests (14 `uniclaw-tools-http` unit + 8
-  `uniclaw-tools-http` integration against a hand-rolled localhost
+- 45 new tests (14 `boardproof-tools-http` unit + 8
+  `boardproof-tools-http` integration against a hand-rolled localhost
   mock server + 5 new `Capability::is_granted_by` unit tests + the
   pre-existing 8 unit + 7 kernel integration carried forward from
   step 13). Workspace test count: **229 → 274**.
 
 ### Changed
 
-- `uniclaw-tools-http` now depends on `uniclaw-secrets` (regular
+- `boardproof-tools-http` now depends on `boardproof-secrets` (regular
   dep). The `serde` feature `alloc` is now enabled in
-  `uniclaw-tools-http` to support the tagged-enum derive on
+  `boardproof-tools-http` to support the tagged-enum derive on
   `AuthSpec` (workspace `serde` has `default-features = false`,
   which lacks the alloc-gated `TaggedContentVisitor` needed by
   `#[serde(tag = "...")]`).
@@ -1395,13 +1496,13 @@ and SSRF gates are not visible in the totals.
 
 ### Adopt-don't-copy
 
-- **`IronClaw`'s SSRF defense** — adopted as `uniclaw-tools-http::ssrf`.
+- **`IronClaw`'s SSRF defense** — adopted as `boardproof-tools-http::ssrf`.
   Same RFC table; we add the IPv6 side. No source borrowed.
 - **`OpenFang`'s capability-enforcement-at-the-tool-boundary pattern**
   — adopted as `Capability::is_granted_by` called from
   `HttpFetchTool::call` before any I/O.
 
-Cited in `crates/uniclaw-tools-http/src/lib.rs` and `ssrf.rs`.
+Cited in `crates/boardproof-tools-http/src/lib.rs` and `ssrf.rs`.
 
 ### Notes
 
@@ -1409,7 +1510,7 @@ Cited in `crates/uniclaw-tools-http/src/lib.rs` and `ssrf.rs`.
   `docs/steps/14-http-fetch-tool.md`. Roadmap and docs index
   updated to reflect the reorder.
 
-- **`uniclaw-tools` crate** — tool execution foundation (Phase 3 step 1
+- **`boardproof-tools` crate** — tool execution foundation (Phase 3 step 1
   / step 13). Workspace member 13. Defines the trait surface every
   later tool-related step plugs into; ships **architecture**, not a
   runtime.
@@ -1464,8 +1565,8 @@ Cited in `crates/uniclaw-tools-http/src/lib.rs` and `ssrf.rs`.
 
   Failed executions get one edge: `kind = "tool_execution_failure"`,
   `to = "error[<variant>]: <message>"`.
-- **All `uniclaw-tools` types re-exported through `uniclaw-kernel`** so
-  callers don't need a direct `uniclaw-tools` dep just to construct
+- **All `boardproof-tools` types re-exported through `boardproof-kernel`** so
+  callers don't need a direct `boardproof-tools` dep just to construct
   `RecordToolExecution`.
 - **Phase 3 sub-step breakdown** added to `docs/03-roadmap.md` (steps
   13–18: foundation → WASM runtime → capability enforcement → secret
@@ -1505,13 +1606,13 @@ This step was preceded by parallel analysis of four reference claws
   default-off).
 
 No source borrowed from any of the four claws. Citations in
-`crates/uniclaw-tools/src/lib.rs` adopt-don't-copy section.
+`crates/boardproof-tools/src/lib.rs` adopt-don't-copy section.
 
 ### Tests
 
-- 34 new unit tests in `uniclaw-tools` (15 glob matcher + 5
+- 34 new unit tests in `boardproof-tools` (15 glob matcher + 5
   capability + 4 tool error + 6 host + 4 noop tool).
-- 7 new integration tests in `uniclaw-kernel/tests/chain.rs`
+- 7 new integration tests in `boardproof-kernel/tests/chain.rs`
   (full success flow with NoopTool round-trip + failure path
   provenance + 5 rejection variants of the authenticity gate, each
   driven by a real Ed25519 signer).
@@ -1519,7 +1620,7 @@ No source borrowed from any of the four claws. Citations in
 - New doc per the standing rule:
   `docs/steps/13-tool-foundation.md`. Roadmap and docs index updated.
 
-- **HTML verifier UI on `uniclaw-host`** (Phase 2 step 4 / step 12).
+- **HTML verifier UI on `boardproof-host`** (Phase 2 step 4 / step 12).
   Closes the verifiability wedge to **non-engineers**: an auditor pastes
   a receipt JSON into `https://your-host/verify`, clicks Verify, and
   sees ✓/✗ in milliseconds — entirely client-side, no install, no
@@ -1527,7 +1628,7 @@ No source borrowed from any of the four claws. Citations in
   - New `GET /verify` route serves a static, self-contained HTML page
     (~8.5 KB) embedded at compile time via `include_str!`. No external
     scripts, no external stylesheets, no CDN dependencies.
-  - Verification path mirrors `uniclaw-receipt::crypto::verify`: parse
+  - Verification path mirrors `boardproof-receipt::crypto::verify`: parse
     JSON → reconstruct canonical body bytes via
     `JSON.stringify(receipt.body)` → `crypto.subtle.importKey("raw",
     issuerBytes, {name: "Ed25519"}, ...)` → `crypto.subtle.verify(
@@ -1552,7 +1653,7 @@ verification of a single receipt is ≤ 1 ms on commodity hardware.
 
 ### Notes
 
-- 4 new tests in `uniclaw-host` (verifier page served + content-type +
+- 4 new tests in `boardproof-host` (verifier page served + content-type +
   no-store cache + UI strings present including
   `crypto.subtle.verify("Ed25519"` + index links to `/verify` + CORS
   preserved). Workspace test count: 184 → 188.
@@ -1567,7 +1668,7 @@ verification of a single receipt is ≤ 1 ms on commodity hardware.
   this shape. Browser-native `crypto.subtle.verify("Ed25519", ...)`
   has been available in Chrome 113+, Firefox 130+, Safari 17+, and
   Node 20+ — no JS crypto library needed. Cited in
-  `crates/uniclaw-host/src/verify.html`.
+  `crates/boardproof-host/src/verify.html`.
 - New doc per the standing rule:
   `docs/steps/12-html-verifier.md`. Roadmap and index updated.
 
@@ -1583,7 +1684,7 @@ verification of a single receipt is ≤ 1 ms on commodity hardware.
 - **Deep Sleep integrity walk** (master plan §16.3.3, ships as Phase 2
   step 3). The second sleep stage. Symmetric to Light Sleep but for
   read-only integrity checks instead of mutating cleanup.
-  - `uniclaw-sleep` gains a `Walkable` trait, `WalkReport` (+ `EMPTY`),
+  - `boardproof-sleep` gains a `Walkable` trait, `WalkReport` (+ `EMPTY`),
     `WalkError`, `WalkerPass`, `DeepSleepReport`, and the
     `run_deep_sleep` orchestrator. Best-effort: a failing walker is
     recorded, not propagated.
@@ -1596,11 +1697,11 @@ verification of a single receipt is ≤ 1 ms on commodity hardware.
     `action.target = "walkers=N items=M bytes=B failed=F"`, and one
     provenance edge per walker (`deep_sleep_pass` for OK,
     `deep_sleep_failure` with the message in `to` for Err).
-  - Sleep types are re-exported through `uniclaw-kernel` so callers
-    don't need a direct `uniclaw-sleep` dep.
+  - Sleep types are re-exported through `boardproof-kernel` so callers
+    don't need a direct `boardproof-sleep` dep.
   - **2 of 3 sleep stages now ship.** REM Sleep waits until Phase 4
     (provenance graph + memory subsystems).
-- 11 new tests (4 in `uniclaw-sleep` unit + 4 in `uniclaw-kernel`
+- 11 new tests (4 in `boardproof-sleep` unit + 4 in `boardproof-kernel`
   unit + 2 integration with real Ed25519 + ReceiptLogWalker over a
   signed log + 1 baseline). Workspace test count: 173 → 184.
 - New doc per the standing rule:
@@ -1625,7 +1726,7 @@ for weekly Deep Sleep.
 - Adopt-don't-copy: integrity-walk-as-receipt is net-new — no other
   claw runtime has a sleep-stage architecture, let alone one that
   mints signed audit receipts for the walks themselves. Cited in
-  `uniclaw-sleep/src/lib.rs` (Postgres autovacuum / SQLite VACUUM are
+  `boardproof-sleep/src/lib.rs` (Postgres autovacuum / SQLite VACUUM are
   conceptual references for cleanup-style passes; integrity walks are
   ours).
 - **`Walkable::walk` takes `&self`**, not `&mut self`, by design:
@@ -1633,7 +1734,7 @@ for weekly Deep Sleep.
   would let a "walker" silently rewrite the chain it was supposed to
   audit — security smell avoided.
 
-- **`uniclaw-store-sqlite` crate** — SQLite-backed `ReceiptLog` impl
+- **`boardproof-store-sqlite` crate** — SQLite-backed `ReceiptLog` impl
   (master plan §16.1 *Audit*, follow-up to step 7, ships as Phase 2
   step 2 / "G2"). Workspace member 12. **Persistence**: receipts
   survive process restarts; the public-URL host (step 9) becomes a
@@ -1643,8 +1744,8 @@ for weekly Deep Sleep.
     `last_leaf_hash` in memory for hot-path append validation.
   - `SqliteReceiptLog::open_in_memory(issuer)` — for tests.
   - `SqliteReceiptLog::peek_issuer(path)` — read just the pinned issuer
-    without committing to opening; used by the `uniclaw-host` binary to
-    decide whether a fresh DB needs `UNICLAW_HOST_ISSUER` or an
+    without committing to opening; used by the `boardproof-host` binary to
+    decide whether a fresh DB needs `BOARDPROOF_HOST_ISSUER` or an
     existing DB pins it already.
   - Same five-step append validation as `InMemoryReceiptLog`. Same
     `verify_chain` semantics. Same issuer pin. Refused appends do not
@@ -1655,10 +1756,10 @@ for weekly Deep Sleep.
     blobs — bit-perfect for cold verification.
   - `OpenError`: `Sqlite` / `Decode` / `IssuerMismatch` /
     `UnsupportedSchema` / `UnsupportedFormatVersion`.
-- **`uniclaw-host` binary: `--db <path>` flag.** Switches the host to
+- **`boardproof-host` binary: `--db <path>` flag.** Switches the host to
   the SQLite backend. The two backends (`--db` for SQLite, default
   `--receipts-dir` for in-memory JSON load) are mutually exclusive.
-  Fresh DB requires `UNICLAW_HOST_ISSUER=<64-char-hex>` to pin the
+  Fresh DB requires `BOARDPROOF_HOST_ISSUER=<64-char-hex>` to pin the
   issuer; subsequent runs read it from the database.
 
 ### Changed
@@ -1668,7 +1769,7 @@ for weekly Deep Sleep.
   `Option<&Receipt>`. SQLite-backed impls cannot return a borrow — the
   row arrives as a JSON blob and the receipt is materialized fresh. The
   in-memory impl just adds an inline `.cloned()` (~1 µs cost). The
-  `uniclaw-host` caller already cloned, so no behavior change there.
+  `boardproof-host` caller already cloned, so no behavior change there.
 
 ### Performance (bench-results/, gitignored — release, x86_64 Linux, 1000-receipt log)
 
@@ -1688,8 +1789,8 @@ behind a network round-trip.
 - Adopt-don't-copy: `OpenFang`'s `audit.rs` writes Merkle-hashed audit
   rows to a `SQLite` table inside its kernel; we keep storage
   out-of-kernel and validate at the trait boundary. No source borrowed.
-  Cited in `uniclaw-store-sqlite/src/lib.rs`.
-- 12 new tests in `uniclaw-store-sqlite` (8 trait conformance + 4
+  Cited in `boardproof-store-sqlite/src/lib.rs`.
+- 12 new tests in `boardproof-store-sqlite` (8 trait conformance + 4
   persistence-specific: reopen preserves state, wrong issuer rejected,
   duplicate id, post-facto tampering caught by `verify_chain`).
   Workspace test count: 161 → 173.
@@ -1699,7 +1800,7 @@ behind a network round-trip.
   `docs/steps/10-sqlite-receipt-store.md`. Roadmap and docs index
   updated.
 
-- **`uniclaw-host` crate** — public-URL receipt hosting (master plan §21
+- **`boardproof-host` crate** — public-URL receipt hosting (master plan §21
   #1, §28 Phase 2 step 1, "G1"). Workspace member 11. **First Phase 2
   step**; first crate to depend on `std` (the trusted core remains
   no_std-friendly).
@@ -1719,17 +1820,17 @@ behind a network round-trip.
     Verification stays the client's job; that's the whole point of cold
     verification. The receipt log already validates signatures at append
     time (Phase 1 step 7).
-  - Bundled `uniclaw-host` binary loads `*.json` receipts from a
+  - Bundled `boardproof-host` binary loads `*.json` receipts from a
     directory and serves them. Pins the log to the issuer of the first
     loaded receipt and validates the chain on load.
-- **`Digest::to_hex` / `Digest::from_hex` on `uniclaw-receipt`** —
+- **`Digest::to_hex` / `Digest::from_hex` on `boardproof-receipt`** —
   public, allocator-only hex helpers, plus `HexDecodeError` for parse
   failures. Used by the `/receipts/<hex>` URL parser; cleaner than
   rolling private helpers in the host crate.
 - **Stack additions (workspace deps):** `axum 0.7`, `tokio 1`,
   `tower 0.5`, `tower-http 0.6` (cors only). All scoped to
-  `uniclaw-host`; the rest of the workspace is unaffected.
-- 10 new tests (4 hex helpers in `uniclaw-receipt` + 7 host integration
+  `boardproof-host`; the rest of the workspace is unaffected.
+- 10 new tests (4 hex helpers in `boardproof-receipt` + 7 host integration
   tests via `tower::ServiceExt::oneshot` with real Ed25519 receipts).
   Workspace test count: 151 → 161.
 - New doc per the standing rule: `docs/steps/09-public-url-hosting.md`.
@@ -1751,7 +1852,7 @@ bottleneck, not the handler.
 - Adopt-don't-copy: public, content-addressed, signed-receipt hosting
   in this shape is net-new — none of the nine reference claw runtimes
   ship signed receipts. HTTP shape follows ordinary REST + RFC 7234/9110
-  cache conventions. Cited in `uniclaw-host/src/lib.rs`.
+  cache conventions. Cited in `boardproof-host/src/lib.rs`.
 - TLS, rate limiting, persistent storage, and an HTML verifier UI are
   **deliberately deferred**. Run behind a reverse proxy for TLS; SQLite
   log lands as a follow-up step; rate limiting will land as a `tower`
@@ -1761,9 +1862,9 @@ bottleneck, not the handler.
   a standing rule going forward is that every implementation step ships
   with (or is followed by) a step doc in `docs/steps/`.
   - `docs/README.md` — index + navigation guidance + style conventions.
-  - `docs/01-what-is-uniclaw.md` — intro for everyone (what Uniclaw is,
+  - `docs/01-what-is-boardproof.md` — intro for everyone (what BoardProof is,
     what it does, who it's for, the eight skills).
-  - `docs/02-uniclaw-vs-openclaw.md` — side-by-side comparison with the
+  - `docs/02-boardproof-vs-openclaw.md` — side-by-side comparison with the
     most popular agent runtime; "when to pick which" guidance.
   - `docs/03-roadmap.md` — friendly tour of the eight phases with
     Mermaid timeline.
@@ -1776,7 +1877,7 @@ bottleneck, not the handler.
 
 ## [Phase 1 — Shippable Core] complete on `main`
 
-- **`uniclaw-sleep` crate** — Light Sleep cleanup architecture (master
+- **`boardproof-sleep` crate** — Light Sleep cleanup architecture (master
   plan §16.3.1). Workspace member 10. The Spine layer's
   background-task surface; the kernel turns each pass into a signed
   audit receipt.
@@ -1808,8 +1909,8 @@ bottleneck, not the handler.
     (`from = "cleaner:<name>"`, `kind = "light_sleep_pass"` for
     successes / `"light_sleep_failure"` for failures with the message
     in `to`).
-  - Sleep types are re-exported through `uniclaw-kernel` so
-    downstream callers don't need a direct `uniclaw-sleep` dep just to
+  - Sleep types are re-exported through `boardproof-kernel` so
+    downstream callers don't need a direct `boardproof-sleep` dep just to
     construct the event.
 - 8 new tests (4 sleep-crate unit + 4 kernel unit + 2 kernel
   integration with real Ed25519 signatures). Integration tests prove
@@ -1841,12 +1942,12 @@ rows-affected counts.
   of the nine reference claw runtimes have it. The cleanup-pass *idea*
   generalizes long-known background-GC patterns from database engines
   (`PostgreSQL`'s autovacuum, `SQLite`'s incremental VACUUM); we mirror
-  that idea, not their code. Cited in `uniclaw-sleep/src/lib.rs`.
+  that idea, not their code. Cited in `boardproof-sleep/src/lib.rs`.
 - REM Sleep (§16.3.2) and Deep Sleep (§16.3.3) arrive in follow-up
   steps once their backing subsystems (provenance graph, federated
   memory CRDT) land.
 
-- **`uniclaw-store` crate** — chain-validated, issuer-pinned receipt log
+- **`boardproof-store` crate** — chain-validated, issuer-pinned receipt log
   (master plan §16.1 *Audit*). Workspace member 9. The substrate Light
   Sleep, public-URL receipt hosting, and provenance-graph queries all
   build on.
@@ -1883,11 +1984,11 @@ rows-affected counts.
   this shape is net-new. `OpenFang`'s `audit.rs` records similar
   Merkle hashes but stores them in a kernel-owned `SQLite` table; we
   keep storage out-of-kernel and validate at the boundary. Cited in
-  `uniclaw-store/src/lib.rs`.
+  `boardproof-store/src/lib.rs`.
 - A `SqliteReceiptLog` impl arrives in a follow-up step. The trait
   surface is designed to support both without changes.
 
-- **`uniclaw-router` crate** — channel-aware approval routing (master plan
+- **`boardproof-router` crate** — channel-aware approval routing (master plan
   §21 #7). Workspace member 8.
   - `ApprovalRouter` trait — synchronous, takes `&mut self` so impls can
     own buffered IO without interior mutability. Returns
@@ -1897,7 +1998,7 @@ rows-affected counts.
     operator cancellation from backend unavailability so callers can
     react appropriately (retry, escalate, fall back).
   - `CliApprovalRouter<R: BufRead, W: Write>` — terminal router. Renders
-    the pending receipt via `uniclaw-explain::render_text`, prompts
+    the pending receipt via `boardproof-explain::render_text`, prompts
     `Approve this action? (y/n)`, retries up to 3 times on bad input,
     treats EOF as cancellation. Generic over IO so tests inject
     `Cursor<Vec<u8>>` and the production path uses
@@ -1929,7 +2030,7 @@ rows-affected counts.
 - Adopt-don't-copy: pattern inspired by IronClaw's exec-approval flow
   and OpenClaw's `deny`/`allowlist`/`ask` exec-policy modes;
   reimplemented from spec, no source borrowed. Cited in
-  `uniclaw-router/src/lib.rs`.
+  `boardproof-router/src/lib.rs`.
 
 ### Performance (bench-results/, gitignored)
 
@@ -1943,7 +2044,7 @@ rows-affected counts.
   `ApprovalDecision` enum (`Approved` / `Denied`); the pluggable
   `ApprovalEngine` trait, channel-aware routing, timeout handling, and
   adaptive promotion arrive in subsequent steps.
-- **`RuleVerdict::RequireApproval`** in `uniclaw-constitution`. Maps to
+- **`RuleVerdict::RequireApproval`** in `boardproof-constitution`. Maps to
   `Decision::Pending` from the constitution evaluator. Precedence rule:
   `Deny` > `RequireApproval` > pass-through, so the safe-by-default
   property holds when both verdicts match.
@@ -1974,7 +2075,7 @@ rows-affected counts.
   sign this pending receipt?" at resolve time without storing anything.
 - **`KernelEvent::evaluate(p)` / `KernelEvent::resolve(a)`** convenience
   constructors so callers don't write `Box::new` everywhere.
-- **`uniclaw-explain` extended:**
+- **`boardproof-explain` extended:**
   - New `RuleKind::KernelApproval { reason }` decodes
     `$kernel/approval/<reason>` rule IDs (today: `denied_by_operator`).
   - New `Verdict::DeniedByOperator`. `Verdict::Pending { rules_consulted }`
@@ -2007,12 +2108,12 @@ rows-affected counts.
 - Full approval round-trip (Pending mint + ResolveApproval): **126 µs/call**
   (~7900 ops/sec) — sign + verify + sign
 
-- **`uniclaw-explain` crate** — cold receipt explainer (master plan §21
+- **`boardproof-explain` crate** — cold receipt explainer (master plan §21
   #13). Library + standalone CLI binary that takes any signed receipt
   and produces a human-readable decision tree without access to kernel
   state.
   - `Explanation` struct: `receipt_id`, `canonical_url`
-    (`uniclaw://receipt/<hash>`), `issuer`, `issued_at`,
+    (`boardproof://receipt/<hash>`), `issuer`, `issued_at`,
     `SignatureStatus`, `ActionInfo`, `decision`, classified rules,
     `Verdict`, `MerkleInfo`, provenance edges.
   - `RuleKind` classifies each rule entry as
@@ -2028,19 +2129,19 @@ rows-affected counts.
   - `render_text` produces stable, snapshot-friendly plain-text;
     `render_json` produces pretty JSON with the same structure for
     tooling.
-  - CLI binary `uniclaw-explain <receipt>` with `--json` flag. Reads
+  - CLI binary `boardproof-explain <receipt>` with `--json` flag. Reads
     from a file or stdin (`-`). Exits **2** on signature failure so
     the binary is scriptable.
   - 15 unit tests + 6 subprocess integration tests covering allowed,
     denied-by-constitution, denied-by-budget, denied-as-proposed,
     tampered receipts, JSON mode, malformed input.
   - **Stripped release binary: 727 KiB** (5 KiB more than
-    `uniclaw-verify`); cold-path latency 3.67 ms/call.
-- **`uniclaw_budget::BudgetError::from_short_name`** — inverse of
+    `boardproof-verify`); cold-path latency 3.67 ms/call.
+- **`boardproof_budget::BudgetError::from_short_name`** — inverse of
   `short_name`, single source of truth for explain tooling decoding
   `$kernel/budget/<reason>` rule IDs.
 
-- **`uniclaw-budget` crate** — capability budget algebra (master plan
+- **`boardproof-budget` crate** — capability budget algebra (master plan
   §11 / §21 #2). Numeric grants of `net_bytes`, `file_writes`,
   `llm_tokens`, `wall_ms`, `max_uses` enforced by `CapabilityLease`.
   - `Budget` + `ResourceUse` with saturating arithmetic (no panic on
@@ -2077,7 +2178,7 @@ rows-affected counts.
   `Proposal::unbounded(...)` (no lease) or `Proposal::with_lease(...)`.
   Tests updated accordingly.
 
-- **`uniclaw-constitution` crate** — deterministic rules engine, separate
+- **`boardproof-constitution` crate** — deterministic rules engine, separate
   from the model, judging proposed actions before the policy gate (master
   plan §11.3). v0 ships:
   - `Constitution` trait + `ConstitutionVerdict` (matched rules + optional
@@ -2107,7 +2208,7 @@ rows-affected counts.
 - `Kernel::new` and `Kernel::resume` now take a third argument: a
   `Constitution` implementation. Existing callers pass `EmptyConstitution`.
 
-- **`uniclaw-kernel` crate** — the trusted runtime core (sketch). Generic
+- **`boardproof-kernel` crate** — the trusted runtime core (sketch). Generic
   over `Signer` + `Clock` traits so tests inject deterministic mocks and
   production can plug HSM-backed signers without touching the kernel.
   Modules: `state` (sequence + prev_hash), `event` (`Proposal`,
@@ -2125,13 +2226,13 @@ rows-affected counts.
 - **RFC-0001 — Receipt Format**, the canonical specification of the wire
   format, canonical encoding, content-addressing, verification algorithm,
   security considerations, and versioning policy.
-- `uniclaw-receipt::crypto` module gated by the `crypto` feature, providing
+- `boardproof-receipt::crypto` module gated by the `crypto` feature, providing
   `sign(body, &SigningKey) -> Receipt` and `verify(&Receipt) -> Result<(), VerifyError>`.
 - Typed `VerifyError` enum (`InvalidIssuerKey`, `SignatureMismatch`,
   `UnsupportedVersion { found, expected }`, `EncodingFailed`).
 - Five round-trip unit tests (sign, tamper-body, tamper-signature,
-  wrong-issuer, unsupported-version) inside `uniclaw-receipt`.
-- Eight subprocess integration tests in `uniclaw-verify/tests/round_trip.rs`
+  wrong-issuer, unsupported-version) inside `boardproof-receipt`.
+- Eight subprocess integration tests in `boardproof-verify/tests/round_trip.rs`
   exercising the actual binary end-to-end. **First public receipt verified.**
 - `mint-sample` cargo example showing how to programmatically mint a receipt.
 - Per-package profile overrides: `ed25519-dalek`, `curve25519-dalek`, `sha2`,
@@ -2141,14 +2242,14 @@ rows-affected counts.
 
 ### Changed
 
-- `uniclaw-verify` binary now delegates verification to
-  `uniclaw_receipt::crypto::verify`, dropping its direct `ed25519-dalek`
+- `boardproof-verify` binary now delegates verification to
+  `boardproof_receipt::crypto::verify`, dropping its direct `ed25519-dalek`
   dependency. Tighter trust boundary: one place where signature math lives.
 - Workspace `ed25519-dalek` enables `fast` (precomputed tables) feature.
 
 ### Initial workspace setup
 
-- Cargo workspace skeleton with `uniclaw-receipt` and `uniclaw-verify` crates.
+- Cargo workspace skeleton with `boardproof-receipt` and `boardproof-verify` crates.
 - Receipt format types (`Receipt`, `ReceiptBody`, `Action`, `Decision`,
   `RuleRef`, `ProvenanceEdge`, `MerkleLeaf`, `Digest`, `PublicKey`,
   `Signature`).
@@ -2157,4 +2258,4 @@ rows-affected counts.
   `lto = "fat"`, `codegen-units = 1`), GitHub Actions CI with
   cross-platform test matrix and hard-ceilings job (TOML-only, ≤ 20 crates).
 
-[Unreleased]: https://github.com/uniclaw/uniclaw/compare/HEAD...HEAD
+[Unreleased]: https://github.com/BoardClaw-Labs/BoardProof/compare/HEAD...HEAD

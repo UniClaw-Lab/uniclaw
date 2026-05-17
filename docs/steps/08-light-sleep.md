@@ -2,19 +2,19 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #7
-> **Crate introduced:** `uniclaw-sleep`
+> **Crate introduced:** `boardproof-sleep`
 
 ## What is this step?
 
-This step introduces **scheduled background cleanup**, the first of three "sleep stages" Uniclaw will use to keep itself tidy.
+This step introduces **scheduled background cleanup**, the first of three "sleep stages" BoardProof will use to keep itself tidy.
 
 Light Sleep runs every hour (in production). It walks through registered cleanup tasks — drop expired session state, reap timed-out capability leases, normalize JSON, vacuum storage — and writes one signed receipt for the whole pass.
 
 The pass is **best-effort** and **idempotent**. A cleaner that fails does not stop the others. The receipt records what happened.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
-Sleep-stage memory (master plan §16.3) is the project's "brand moment" — *Uniclaw is the first agent runtime that sleeps.* Three stages are planned:
+Sleep-stage memory (master plan §16.3) is the project's "brand moment" — *BoardProof is the first agent runtime that sleeps.* Three stages are planned:
 
 | Stage | Frequency | Purpose |
 |---|---|---|

@@ -2,16 +2,16 @@
 
 > **Phase:** 2 — Public Service
 > **PR:** _this PR_
-> **Crate introduced:** `uniclaw-store-sqlite`
-> **Crates updated:** `uniclaw-store` (trait now returns owned `Option<Receipt>`), `uniclaw-host` (gains a `--db <path>` flag)
+> **Crate introduced:** `boardproof-store-sqlite`
+> **Crates updated:** `boardproof-store` (trait now returns owned `Option<Receipt>`), `boardproof-host` (gains a `--db <path>` flag)
 
 ## What is this step?
 
-This step gives Uniclaw a **persistent receipt log**. Until now every receipt log lived in RAM — the moment a process restarted, every receipt was gone. With this step, you can point a kernel (or a host) at a SQLite file and the receipts survive across restarts, crashes, and reboots.
+This step gives BoardProof a **persistent receipt log**. Until now every receipt log lived in RAM — the moment a process restarted, every receipt was gone. With this step, you can point a kernel (or a host) at a SQLite file and the receipts survive across restarts, crashes, and reboots.
 
 The on-disk log honors the same five-step append validation as the in-memory log. The same `verify_chain` walk. The same issuer pin. The only thing that changes is **where the receipts live** — and therefore whether they outlive the process that produced them.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Without persistence, the public-URL host (G1, step 9) was a demo: the moment you kill the process, the receipts you served are gone. With persistence, the host becomes a real service. Auditors can cite a URL today and verify the same receipt next year.
 
@@ -20,7 +20,7 @@ graph LR
   K[Kernel] -->|signed receipt| L{ReceiptLog trait}
   L -->|in-memory<br>fast tests| MEM[InMemoryReceiptLog]
   L -->|disk<br>real deployment| SQL[SqliteReceiptLog]
-  MEM -->|read by| H[uniclaw-host]
+  MEM -->|read by| H[boardproof-host]
   SQL -->|read by| H
 ```
 
@@ -57,7 +57,7 @@ The cache is correct because v0 assumes a single writer per process. If we ever 
 
 ### 3. "How do we let `axum` share the log across async tasks?"
 
-`rusqlite::Connection` is `!Sync` — it cannot be shared concurrently across threads. But axum's multi-thread runtime requires the State extractor to be `Sync`. Solution: wrap the connection in `std::sync::Mutex<Connection>` inside `SqliteReceiptLog`. Every method acquires the mutex briefly. The outer `tokio::sync::RwLock` (already used by `uniclaw-host`) serializes async access; the inner `std::Mutex` is uncontended in practice and exists purely to satisfy the `Sync` bound.
+`rusqlite::Connection` is `!Sync` — it cannot be shared concurrently across threads. But axum's multi-thread runtime requires the State extractor to be `Sync`. Solution: wrap the connection in `std::sync::Mutex<Connection>` inside `SqliteReceiptLog`. Every method acquires the mutex briefly. The outer `tokio::sync::RwLock` (already used by `boardproof-host`) serializes async access; the inner `std::Mutex` is uncontended in practice and exists purely to satisfy the `Sync` bound.
 
 ## Why we changed the `ReceiptLog` trait
 
@@ -79,7 +79,7 @@ There's one **breaking change** to the `ReceiptLog` trait this step ships:
 ## How does it work in plain words?
 
 ```rust
-use uniclaw_store_sqlite::SqliteReceiptLog;
+use boardproof_store_sqlite::SqliteReceiptLog;
 
 // Open or create the log at this path, pinned to my Ed25519 public key.
 let mut log = SqliteReceiptLog::open("./receipts.db", my_pubkey)?;
@@ -96,17 +96,17 @@ if let Some(r) = log.get_by_id(&hash) {
 log.verify_chain()?;
 ```
 
-The `uniclaw-host` binary now accepts `--db <path>` to use SQLite mode:
+The `boardproof-host` binary now accepts `--db <path>` to use SQLite mode:
 
 ```sh
 # First run on a fresh DB — required to set the issuer.
-$ UNICLAW_HOST_ISSUER=<64-char-hex> uniclaw-host --db ./receipts.db
-uniclaw-host: backend=sqlite source=./receipts.db serving 0 receipt(s)
+$ BOARDPROOF_HOST_ISSUER=<64-char-hex> boardproof-host --db ./receipts.db
+boardproof-host: backend=sqlite source=./receipts.db serving 0 receipt(s)
               (issuer 9c1aef…) on http://127.0.0.1:8787
 
-# Subsequent runs: issuer is read from the DB; UNICLAW_HOST_ISSUER ignored.
-$ uniclaw-host --db ./receipts.db
-uniclaw-host: backend=sqlite source=./receipts.db serving 1247 receipt(s)
+# Subsequent runs: issuer is read from the DB; BOARDPROOF_HOST_ISSUER ignored.
+$ boardproof-host --db ./receipts.db
+boardproof-host: backend=sqlite source=./receipts.db serving 1247 receipt(s)
               (issuer 9c1aef…) on http://127.0.0.1:8787
 ```
 
@@ -115,16 +115,16 @@ The `--receipts-dir` mode (in-memory, load JSON files) still exists for tests an
 ## Why this design choice and not another?
 
 - **Why `rusqlite` and not `sqlx`?** No compile-time SQL macros, no async overhead, smaller dependency tree. Our query set is six statements; we don't need a query builder.
-- **Why `bundled` SQLite?** Static linking removes a system dependency. Cost is ~1 MB of binary size on `uniclaw-host` only — acceptable for a server binary; the verifier and core stay tiny.
+- **Why `bundled` SQLite?** Static linking removes a system dependency. Cost is ~1 MB of binary size on `boardproof-host` only — acceptable for a server binary; the verifier and core stay tiny.
 - **Why store the whole receipt as a JSON blob, not column-shredded?** Two reasons. (1) Cold verification reads the receipt verbatim — bit-perfect storage matters. (2) The trait surface returns a `Receipt`; reconstituting from columns would risk drift if the canonical encoding ever changes. JSON blob is faithful.
 - **Why WAL mode?** Concurrent reads + a single writer with no reader/writer blocking. Right shape for an audit log: you append from one place, read from many.
 - **Why `synchronous = NORMAL` and not `FULL`?** NORMAL loses at most the last few milliseconds of writes on a power loss. The audit chain catches that on the next restart via `verify_chain` (the chain breaks at the unwritten leaf), which is exactly the failure mode receipts are designed to detect. FULL would double-fsync on every commit for protection we already have.
-- **Why pin the issuer in the `meta` table, not derive it from the first receipt at open?** Explicit pin means a fresh DB needs an explicit issuer (`UNICLAW_HOST_ISSUER` env var) — operators cannot accidentally start a chain with a default key.
+- **Why pin the issuer in the `meta` table, not derive it from the first receipt at open?** Explicit pin means a fresh DB needs an explicit issuer (`BOARDPROOF_HOST_ISSUER` env var) — operators cannot accidentally start a chain with a default key.
 - **Why a `Mutex<Connection>` inside the struct?** Axum's `State` requires `Sync`. The mutex is the smallest change that makes `SqliteReceiptLog: Sync`. The outer tokio `RwLock` already serializes; the inner mutex is a Sync token, not a contention point.
 
 ## What you can do with this step today
 
-- Run `uniclaw-host --db ./receipts.db` and have a real, restart-safe audit service.
+- Run `boardproof-host --db ./receipts.db` and have a real, restart-safe audit service.
 - Use `SqliteReceiptLog` directly from any Rust program that needs persistent receipt storage.
 - Reopen a database produced by an earlier process and continue appending — the chain validation uses the cached `last_leaf_hash` reloaded from disk.
 - Run `verify_chain()` on a million-receipt database in roughly the same time as the in-memory baseline (per-receipt cost is ~62 µs, dominated by Ed25519).
@@ -148,4 +148,4 @@ The ~4× append slowdown is the WAL write + fsync. Still 2,700 appends/sec — c
 
 ## In summary
 
-Step 10 (the second step of Phase 2) makes the receipt log persistent. The trait stayed almost identical — one small tweak from `&Receipt` to `Receipt` — and a new crate plugs SQLite in behind the same surface. The host can now serve receipts that survive restarts, which is the prerequisite for any real `uniclaw.dev` deployment, and Deep Sleep's future integrity walks will finally be walking something meaningful.
+Step 10 (the second step of Phase 2) makes the receipt log persistent. The trait stayed almost identical — one small tweak from `&Receipt` to `Receipt` — and a new crate plugs SQLite in behind the same surface. The host can now serve receipts that survive restarts, which is the prerequisite for any real `boardproof.dev` deployment, and Deep Sleep's future integrity walks will finally be walking something meaningful.

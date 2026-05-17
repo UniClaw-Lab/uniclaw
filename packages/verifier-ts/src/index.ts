@@ -1,4 +1,4 @@
-// Public API for `@uniclaw/verifier`.
+// Public API for `@boardproof/verifier`.
 //
 // The package surface is intentionally narrow: canonicalize a
 // body, recompute the content_id, verify a receipt. Everything

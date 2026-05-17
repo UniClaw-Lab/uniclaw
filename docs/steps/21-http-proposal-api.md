@@ -2,16 +2,16 @@
 
 > **Phase:** 3.5 — Receipt-format hardening + adoption-foundations
 > **PR:** _this PR_
-> **Crates touched:** `uniclaw-host` (new modules: `api`, `signer`, `clock`; new bin flags; deps move from dev to regular)
-> **New artefacts:** `crates/uniclaw-host/src/{api,signer,clock}.rs`, `tests/api.rs`
+> **Crates touched:** `boardproof-host` (new modules: `api`, `signer`, `clock`; new bin flags; deps move from dev to regular)
+> **New artefacts:** `crates/boardproof-host/src/{api,signer,clock}.rs`, `tests/api.rs`
 
 ## What is this step?
 
-Steps 19 + 20 + 20a closed thresholds 1 (portability) and 2 (visibility): receipts are byte-identical across languages and a stranger can run one command to see the wedge end-to-end. The big remaining lever is **threshold 3 — adoption**: another claw says *"Uniclaw-compatible."*
+Steps 19 + 20 + 20a closed thresholds 1 (portability) and 2 (visibility): receipts are byte-identical across languages and a stranger can run one command to see the wedge end-to-end. The big remaining lever is **threshold 3 — adoption**: another claw says *"BoardProof-compatible."*
 
-Before step 21, the only way to integrate Uniclaw was to *link the Rust kernel* into your runtime. That works for ZeroClaw (Rust). It doesn't work for OpenClaw (TypeScript), NemoClaw (Python), or the other non-Rust claws — the majority of the integration market.
+Before step 21, the only way to integrate BoardProof was to *link the Rust kernel* into your runtime. That works for ZeroClaw (Rust). It doesn't work for OpenClaw (TypeScript), NemoClaw (Python), or the other non-Rust claws — the majority of the integration market.
 
-Step 21 ships the **local-sidecar integration pattern** from the war analysis: run `uniclaw-host` as a process next to your existing runtime; submit proposals over HTTP; get back signed receipts.
+Step 21 ships the **local-sidecar integration pattern** from the war analysis: run `boardproof-host` as a process next to your existing runtime; submit proposals over HTTP; get back signed receipts.
 
 ```
        ┌──────────────────────────────┐
@@ -22,7 +22,7 @@ Step 21 ships the **local-sidecar integration pattern** from the war analysis: r
                        │  POST /v1/approvals/{id}/resolve
                        ▼
        ┌──────────────────────────────┐
-       │  uniclaw-host                │
+       │  boardproof-host                │
        │  --constitution=...          │
        │  --signer-seed-hex=...       │
        │  (in-memory kernel + log)    │
@@ -31,19 +31,19 @@ Step 21 ships the **local-sidecar integration pattern** from the war analysis: r
                        ▼
                   signed receipts
                   (verifiable cold via
-                   @uniclaw/verifier or
+                   @boardproof/verifier or
                    /verify in any browser)
 ```
 
-Net: any language that speaks HTTP can mint Uniclaw receipts, with the receipt-format guarantees intact.
+Net: any language that speaks HTTP can mint BoardProof receipts, with the receipt-format guarantees intact.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
-This step extends `uniclaw-host` with a second axis. Read-only mode (the original step-9 surface) is untouched; proposal mode is opt-in via `--constitution`.
+This step extends `boardproof-host` with a second axis. Read-only mode (the original step-9 surface) is untouched; proposal mode is opt-in via `--constitution`.
 
 ```
                     ┌──────────────────────────────────────┐
-                    │  uniclaw-host binary                 │
+                    │  boardproof-host binary                 │
                     │                                      │
                     │   read-only mode (default):          │
                     │     GET /receipts/<hash>             │
@@ -59,13 +59,13 @@ This step extends `uniclaw-host` with a second axis. Read-only mode (the origina
                     └──────────────────────────────────────┘
 ```
 
-The api module reuses everything: kernel from `uniclaw-kernel`, constitution from `uniclaw-constitution`, log from `uniclaw-store::InMemoryReceiptLog`, signing from `uniclaw-receipt::crypto`. The wire format mirrors `Receipt` / `ReceiptBody` byte-for-byte — clients receive *exactly* the same JSON the kernel signed.
+The api module reuses everything: kernel from `boardproof-kernel`, constitution from `boardproof-constitution`, log from `boardproof-store::InMemoryReceiptLog`, signing from `boardproof-receipt::crypto`. The wire format mirrors `Receipt` / `ReceiptBody` byte-for-byte — clients receive *exactly* the same JSON the kernel signed.
 
 ## What problem does it solve technically?
 
 Three problems.
 
-### 1. "How do I integrate Uniclaw if my runtime isn't Rust?"
+### 1. "How do I integrate BoardProof if my runtime isn't Rust?"
 
 Before this step, the war analysis enumerated three integration patterns — but only one (embedded kernel library) had a working code path. The other two (local sidecar, witness service) were aspirational.
 
@@ -73,7 +73,7 @@ Now the local sidecar works:
 
 ```bash
 # operator side
-$ uniclaw-host \
+$ boardproof-host \
     --constitution ./constitutions/solo-dev.toml \
     --signer-seed-hex 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a \
     --bind 127.0.0.1:8787
@@ -120,12 +120,12 @@ The two proposal-mode endpoints are sufficient to demonstrate the Constitution +
 
 It doesn't, in this PR — and that's deliberate.
 
-The local-sidecar pattern assumes loopback or unix-socket trust: the sidecar runs on the same host as the calling runtime, on a port nothing else can reach. That's the right baseline for a Phase-3.5 deliverable; production deployments wanting a remote sidecar can add a reverse proxy with bearer-token / mTLS in front of `:8787` without any change to Uniclaw.
+The local-sidecar pattern assumes loopback or unix-socket trust: the sidecar runs on the same host as the calling runtime, on a port nothing else can reach. That's the right baseline for a Phase-3.5 deliverable; production deployments wanting a remote sidecar can add a reverse proxy with bearer-token / mTLS in front of `:8787` without any change to BoardProof.
 
 The binary logs a warning on startup so operators don't accidentally bind to `0.0.0.0`:
 
 ```
-uniclaw-host: WARN /v1 proposal API is unauthenticated — keep this
+boardproof-host: WARN /v1 proposal API is unauthenticated — keep this
               bound to loopback or a trusted network segment.
 ```
 
@@ -133,10 +133,10 @@ A future PR adds first-class bearer-token auth configured at startup (one env va
 
 ## How does it work in plain words?
 
-`bin/uniclaw-host.rs` gets a new mode that activates when `--constitution <path>` is passed:
+`bin/boardproof-host.rs` gets a new mode that activates when `--constitution <path>` is passed:
 
 1. **Load the signer.** `--signer-seed-hex <64-hex>` → `Ed25519Signer::from_seed`. The seed is dev-grade (deterministic; real deployments add an HSM signer in a future step). The same seed across restarts means the issuer public key stays stable — useful for testing and for any external client that wants to pin the issuer.
-2. **Load the constitution.** The TOML file goes through `uniclaw_constitution::parse_toml` → `InMemoryConstitution`. Rule edits require a host restart for now.
+2. **Load the constitution.** The TOML file goes through `boardproof_constitution::parse_toml` → `InMemoryConstitution`. Rule edits require a host restart for now.
 3. **Wire the kernel + log.** `Kernel::new(signer, SystemClock, constitution)` + `Arc<RwLock<InMemoryReceiptLog>>`. The log is shared with the read-only router so newly minted receipts are immediately fetchable at `/receipts/<hash>`.
 4. **Mount the API.** `api_router(state)` returns the `/v1` routes; `Router::merge` composes them with the existing read-only router.
 
@@ -183,26 +183,26 @@ The handler:
 
 - **Run the sidecar:**
   ```bash
-  cargo run --release -p uniclaw-host --bin uniclaw-host -- \
+  cargo run --release -p boardproof-host --bin boardproof-host -- \
       --constitution constitutions/solo-dev.toml \
       --signer-seed-hex 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a \
       --bind 127.0.0.1:8787
   ```
 - **Submit proposals from any language:** curl, fetch, requests, ureq, reqwest. The body shape is documented above.
-- **Verify cold:** pass any returned receipt URL through `@uniclaw/verifier` (step 20a) or the browser `/verify` page (step 12).
+- **Verify cold:** pass any returned receipt URL through `@boardproof/verifier` (step 20a) or the browser `/verify` page (step 12).
 - **Test the full flow:** the test constitution at `constitutions/solo-dev.toml` already denies `shell.exec` and requires approval for `*/admin/*`; a 4-step curl sequence (Allowed, Pending, Approved, Denied) exercises every code path.
 
 ## Verified during this PR
 
 - **11 new integration tests (`tests/api.rs`) pass.** Happy paths (allowed/denied/pending/approved/denied-via-resolve), error paths (400/404/409 for each shape), and a chain test asserting that sequence numbers increment and `prev_hash` links across three sequential proposals.
 - **5 new clock unit tests pass** covering epoch, known dates, pre-epoch, and the RFC 3339 shape contract.
-- **Cross-language end-to-end smoke against the live binary.** Started `uniclaw-host` with the deterministic demo seed, submitted Allowed / Pending / Approved / Denied via curl, fetched each receipt URL via `npx uniclaw-verify-ts`. All 4 verify; tamper test (flip the `decision` field) correctly rejected.
+- **Cross-language end-to-end smoke against the live binary.** Started `boardproof-host` with the deterministic demo seed, submitted Allowed / Pending / Approved / Denied via curl, fetched each receipt URL via `npx boardproof-verify-ts`. All 4 verify; tamper test (flip the `decision` field) correctly rejected.
 - **Bench:** 4.2 ms per request with HTTP keepalive (500 sequential proposals via Python urllib). curl-per-request is 30 ms but dominated by curl process startup, not the API.
 - **All 4 Rust gates clean:** fmt, build, **test 398/398 (+16 new)**, clippy. Workspace stays at 17 of 20 crates.
 
 ## Adopt-don't-copy
 
-- The HTTP proposal endpoint shape is informed by the war analysis's sidecar API specification; the wire shape (`{action: {kind, target, input_hash}}` → `{decision, content_id, receipt_url, ...}`) is original to Uniclaw. None of the reference claw runtimes ship a comparable proposal-receipt API.
+- The HTTP proposal endpoint shape is informed by the war analysis's sidecar API specification; the wire shape (`{action: {kind, target, input_hash}}` → `{decision, content_id, receipt_url, ...}`) is original to BoardProof. None of the reference claw runtimes ship a comparable proposal-receipt API.
 - The `SystemClock` RFC 3339 formatter uses Howard Hinnant's `civil_from_days` algorithm from <https://howardhinnant.github.io/date_algorithms.html> (public domain). Citation in the doc comment.
 - axum's `Router::merge` + `with_state` pattern is the documented composition primitive.
 
@@ -224,16 +224,16 @@ Measured on `release` profile, Linux x86_64, the same machine all prior benches 
 - `POST /v1/proposals` over fresh TCP (curl-per-request, 100 sequential): 29.96 ms / request — dominated by curl startup, not the API.
 - The HTTP overhead (~4.17 ms over the direct kernel call) is well within "human time" for any realistic agent action. The local-sidecar pattern is viable.
 
-Production-relevant binary size: the `uniclaw-host` binary stripped is ~6.5 MB (vs ~6 MB before this step), with the kernel + constitution + ed25519-dalek now linked into production. Acceptable.
+Production-relevant binary size: the `boardproof-host` binary stripped is ~6.5 MB (vs ~6 MB before this step), with the kernel + constitution + ed25519-dalek now linked into production. Acceptable.
 
 ## In summary
 
-Step 21 ships the threshold-3 lever. *Any* language can now produce verifiable Uniclaw receipts by running a small sidecar and POSTing JSON — no Rust toolchain, no kernel embedding. Combined with `@uniclaw/verifier` (step 20a), the wedge is integration-ready: the receipt-as-protocol claim has both the production path (sidecar mints) and the consumption path (TS verifier validates) shipped.
+Step 21 ships the threshold-3 lever. *Any* language can now produce verifiable BoardProof receipts by running a small sidecar and POSTing JSON — no Rust toolchain, no kernel embedding. Combined with `@boardproof/verifier` (step 20a), the wedge is integration-ready: the receipt-as-protocol claim has both the production path (sidecar mints) and the consumption path (TS verifier validates) shipped.
 
 Threshold status after this PR:
 
 - ✅ Threshold 1 (portability) — closed by step 20a.
 - ✅ Threshold 2 (visibility) — closed by step 20.
-- 🟡 Threshold 3 (adoption) — **lever shipped.** Next: build the first adapter against a real claw (OpenClaw or ZeroClaw) and show "X is Uniclaw-compatible" in the wild.
+- 🟡 Threshold 3 (adoption) — **lever shipped.** Next: build the first adapter against a real claw (OpenClaw or ZeroClaw) and show "X is BoardProof-compatible" in the wild.
 
 The receipt is portable. The receipt is demonstrable. **The receipt is now integrable.**

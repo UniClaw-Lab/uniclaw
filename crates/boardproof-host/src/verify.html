@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BoardProof Receipt Verifier</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 48em; margin: 3em auto; padding: 0 1em; line-height: 1.55; color: #1f2328;
+  }
+  h1 { margin-bottom: 0.1em; font-size: 1.6em; }
+  .lede { color: #57606a; margin-top: 0.2em; }
+  p { margin: 0.6em 0; }
+  textarea {
+    width: 100%; box-sizing: border-box; min-height: 11em;
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    padding: 0.6em; border: 1px solid #d0d7de; border-radius: 6px; resize: vertical;
+  }
+  button {
+    margin-top: 0.6em; padding: 0.55em 1.2em; font-size: 1em; font-weight: 500;
+    border: 0; border-radius: 6px; background: #1f6feb; color: white; cursor: pointer;
+  }
+  button:hover { background: #1a5fcb; }
+  button:disabled { background: #8c959f; cursor: not-allowed; }
+  #result {
+    margin-top: 1.5em; padding: 1em 1.1em; border-radius: 6px; display: none;
+  }
+  #result.ok { background: #dafbe1; border-left: 4px solid #1a7f37; }
+  #result.bad { background: #ffebe9; border-left: 4px solid #d1242f; }
+  #result h2 { margin: 0 0 0.4em 0; font-size: 1.05em; }
+  #result dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25em 0.9em; margin: 0.5em 0 0 0; font-size: 0.95em; }
+  #result dt { color: #57606a; font-weight: 500; }
+  #result dd { margin: 0; font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
+  .warn {
+    background: #fff8c5; border-left: 4px solid #d4a72c;
+    padding: 0.8em 1em; margin: 1em 0; border-radius: 6px; font-size: 0.95em;
+  }
+  footer {
+    margin-top: 4em; color: #57606a; font-size: 0.9em;
+    border-top: 1px solid #d0d7de; padding-top: 1em;
+  }
+  a { color: #0969da; }
+  code {
+    background: #eaeef2; padding: 0.1em 0.35em; border-radius: 4px;
+    font: 0.9em ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+<h1>BoardProof Receipt Verifier</h1>
+<p class="lede">Cold-verify a BoardProof receipt in your browser. Nothing leaves this page.</p>
+
+<p>
+  Paste a receipt JSON below (for example, what you get from
+  <code>GET /receipts/&lt;hash&gt;</code>) and click <strong>Verify</strong>.
+  This page reconstructs the canonical body and runs an Ed25519
+  signature check against the receipt's embedded issuer key —
+  entirely client-side using the browser's native
+  <code>crypto.subtle</code>. There is no server-side verification.
+</p>
+
+<div id="warn-noed25519" class="warn" hidden>
+  ⚠ Your browser does not appear to support Ed25519 in
+  <code>crypto.subtle</code>. Try Chrome 113+, Firefox 130+, or
+  Safari 17+. You can still inspect the receipt fields below — just
+  not verify the signature here. The standalone <code>boardproof-verify</code>
+  CLI works on every platform.
+</div>
+
+<textarea id="input" spellcheck="false" autocomplete="off"
+  placeholder='{"version":1,"body":{...},"issuer":"...","signature":"..."}'></textarea>
+<button id="go" type="button">Verify</button>
+
+<div id="result" role="status" aria-live="polite"></div>
+
+<footer>
+  See <a href="https://github.com/UniClaw-Lab/boardproof">the project on GitHub</a>
+  for the receipt format spec (RFC-0001) and the offline command-line
+  verifier (<code>boardproof-verify</code>).
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // --- helpers ---
+
+  function hexToBytes(hex) {
+    if (typeof hex !== "string") throw new Error("hex must be a string");
+    if (hex.length % 2 !== 0) throw new Error("hex must be even-length");
+    const out = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out.length; i++) {
+      const b = parseInt(hex.substr(i * 2, 2), 16);
+      if (Number.isNaN(b)) throw new Error("invalid hex character at offset " + (i * 2));
+      out[i] = b;
+    }
+    return out;
+  }
+
+  function shortFingerprint(bytes) {
+    return Array.from(bytes.slice(0, 4))
+      .map(b => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  function htmlEscape(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[c]);
+  }
+
+  // --- canonicalization ---
+  //
+  // Receipts at schema_version >= 2 use RFC 8785 JCS. This is the
+  // JS port of crates/boardproof-receipt/src/canonical.rs. Two
+  // verifiers in different languages running JCS over the same
+  // body MUST produce identical bytes — that's what the
+  // tests/vectors/canonical-v2.json fixture exists to confirm.
+  //
+  // The canonical TypeScript reference lives at
+  // `packages/verifier-ts/src/canonical.ts` (npm package
+  // `@boardproof/verifier`, step 20a). Keep these two ports in
+  // lockstep — both load the same conformance fixture, so a
+  // drift in either fails its own test suite first.
+  //
+  // Scope: handles the shape BoardProof receipts actually use
+  // (string keys, integer numbers only, ASCII-mostly strings).
+  // Floats throw rather than emit potentially wrong bytes, same
+  // as the Rust side.
+
+  function canonicalizeBody(body) {
+    if (body && typeof body === "object" && body.schema_version >= 2) {
+      return canonicalizeJcs(body);
+    }
+    // Legacy path (v1): serde_json's struct-declaration order.
+    // ES2015 insertion order on a JSON.parse'd body matches.
+    return JSON.stringify(body);
+  }
+
+  function canonicalizeJcs(value) {
+    if (value === null) return "null";
+    if (value === true) return "true";
+    if (value === false) return "false";
+    if (typeof value === "number") {
+      if (!Number.isInteger(value)) {
+        throw new Error("JCS: expected integer, got float " + value);
+      }
+      return String(value);
+    }
+    if (typeof value === "string") {
+      return canonicalizeJcsString(value);
+    }
+    if (Array.isArray(value)) {
+      return "[" + value.map(canonicalizeJcs).join(",") + "]";
+    }
+    if (typeof value === "object") {
+      // Sort keys by UTF-16 code units. JS String.prototype.localeCompare
+      // uses locale-sensitive ordering; the default `sort()` uses
+      // UTF-16 code unit comparison via abstract relational comparison
+      // — which is what JCS specifies.
+      const keys = Object.keys(value).sort();
+      return "{" + keys.map(k =>
+        canonicalizeJcsString(k) + ":" + canonicalizeJcs(value[k])
+      ).join(",") + "}";
+    }
+    throw new Error("JCS: unsupported value type " + typeof value);
+  }
+
+  function canonicalizeJcsString(s) {
+    let out = '"';
+    for (const c of s) {
+      const code = c.codePointAt(0);
+      switch (c) {
+        case '"':  out += '\\"';  break;
+        case '\\': out += '\\\\'; break;
+        case '\b': out += '\\b';  break;
+        case '\f': out += '\\f';  break;
+        case '\n': out += '\\n';  break;
+        case '\r': out += '\\r';  break;
+        case '\t': out += '\\t';  break;
+        default:
+          if (code < 0x20) {
+            out += '\\u' + code.toString(16).padStart(4, '0');
+          } else {
+            out += c;
+          }
+      }
+    }
+    return out + '"';
+  }
+
+  // --- core verification ---
+
+  async function ed25519Supported() {
+    if (!window.crypto || !window.crypto.subtle) return false;
+    try {
+      // 32 zero bytes is a syntactically-valid Ed25519 public key.
+      // importKey will reject if the algorithm isn't supported.
+      await crypto.subtle.importKey(
+        "raw", new Uint8Array(32),
+        { name: "Ed25519" }, false, ["verify"]
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function verifyReceipt(receipt) {
+    if (!receipt || typeof receipt !== "object") {
+      throw new Error("input is not a JSON object");
+    }
+    if (!receipt.body || typeof receipt.body !== "object") {
+      throw new Error("receipt is missing a body");
+    }
+    if (typeof receipt.issuer !== "string") {
+      throw new Error("issuer must be a hex string");
+    }
+    if (typeof receipt.signature !== "string") {
+      throw new Error("signature must be a hex string");
+    }
+
+    const issuerBytes = hexToBytes(receipt.issuer);
+    if (issuerBytes.length !== 32) {
+      throw new Error("issuer must be 32 bytes (64 hex chars), got " + issuerBytes.length);
+    }
+    const sigBytes = hexToBytes(receipt.signature);
+    if (sigBytes.length !== 64) {
+      throw new Error("signature must be 64 bytes (128 hex chars), got " + sigBytes.length);
+    }
+
+    // Reconstruct the canonical body bytes the kernel signed.
+    //
+    // The canonicalization rule depends on the body's schema_version:
+    //
+    // - schema_version <= 1: serde_json default. Keys appear in
+    //   struct-declaration order. Since ES2015 JS preserves
+    //   insertion order, JSON.stringify on a JSON.parse'd body
+    //   reproduces those bytes for any receipt fetched directly
+    //   from /receipts/<hash>.
+    //
+    // - schema_version >= 2: RFC 8785 JCS. Keys lexicographic,
+    //   numbers normalized, standard string escapes. The
+    //   canonicalizeJcs() function below is the JS port of the
+    //   Rust `boardproof_receipt::canonical::to_vec`. Cross-language
+    //   verifiers running JCS over the same logical body MUST
+    //   produce identical bytes.
+    //
+    // Reference fixtures for conformance live at
+    // crates/boardproof-receipt/tests/vectors/canonical-v2.json.
+    const bodyStr = canonicalizeBody(receipt.body);
+    const bodyBytes = new TextEncoder().encode(bodyStr);
+
+    const key = await crypto.subtle.importKey(
+      "raw", issuerBytes,
+      { name: "Ed25519" }, false, ["verify"]
+    );
+    const ok = await crypto.subtle.verify("Ed25519", key, sigBytes, bodyBytes);
+    return { ok, issuerBytes };
+  }
+
+  // --- UI ---
+
+  function renderResult(ok, info) {
+    const r = document.getElementById("result");
+    r.className = ok ? "ok" : "bad";
+    r.style.display = "block";
+    const heading = ok ? "✓ Receipt verified" : "✗ Verification failed";
+    let body = "";
+    if (info.body) {
+      const b = info.body;
+      const fp = info.issuerBytes ? shortFingerprint(info.issuerBytes) + "…" : "?";
+      const action = b.action || {};
+      body = "<dl>" +
+        "<dt>Issuer (fp)</dt><dd>" + htmlEscape(fp) + "</dd>" +
+        "<dt>Decision</dt><dd>" + htmlEscape(b.decision || "?") + "</dd>" +
+        "<dt>Action</dt><dd>" +
+          htmlEscape(action.kind || "?") + " → " +
+          htmlEscape(action.target || "?") + "</dd>" +
+        "<dt>Sequence</dt><dd>" +
+          htmlEscape(b.merkle_leaf ? String(b.merkle_leaf.sequence) : "?") + "</dd>" +
+        "<dt>Issued at</dt><dd>" + htmlEscape(b.issued_at || "?") + "</dd>" +
+        "</dl>";
+    }
+    if (info.error) {
+      body += "<p>" + htmlEscape(info.error) + "</p>";
+    }
+    r.innerHTML = "<h2>" + heading + "</h2>" + body;
+  }
+
+  document.getElementById("go").addEventListener("click", async () => {
+    const text = document.getElementById("input").value.trim();
+    if (!text) {
+      renderResult(false, { error: "Paste a receipt first." });
+      return;
+    }
+    let r;
+    try {
+      r = JSON.parse(text);
+    } catch (e) {
+      renderResult(false, { error: "Invalid JSON: " + e.message });
+      return;
+    }
+    try {
+      const { ok, issuerBytes } = await verifyReceipt(r);
+      renderResult(ok, {
+        body: r.body,
+        issuerBytes,
+        error: ok ? null : "Signature did not verify under the embedded issuer key.",
+      });
+    } catch (e) {
+      renderResult(false, { body: r.body, error: e.message });
+    }
+  });
+
+  ed25519Supported().then(supported => {
+    if (!supported) {
+      document.getElementById("warn-noed25519").hidden = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

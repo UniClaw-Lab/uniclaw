@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Tools and Secrets
 > **PR:** _this PR_
-> **Crates touched:** `uniclaw-tools-wasm`
+> **Crates touched:** `boardproof-tools-wasm`
 > **New artefacts:** extended `wit/tool.wit` + `tests/fixtures/http-tool-component/` + committed `http-tool-component.wasm`
 
 ## What is this step?
@@ -13,7 +13,7 @@ Step 16c closes that gap: a new `host` interface that guests can import for capa
 
 The principle: every host import the guest can call is a thin shim that delegates to the existing trait surface from steps 13/14/15. `host::http-fetch` calls `HttpFetchTool::call`. `host::secret-exists` calls `SecretBroker::fetch(name).is_ok()`. `host::log-message` accumulates into `HostState`. There is no parallel implementation; the WASM layer is *facade*, not *fork*.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The Hands layer is now four layers deep:
 
@@ -74,9 +74,9 @@ Host side:
 
 ```rust
 use std::sync::Arc;
-use uniclaw_tools_wasm::{WasmConfig, WasmTool};
-use uniclaw_tools_http::{HttpFetchConfig, HttpFetchTool};
-use uniclaw_secrets::{InMemorySecretBroker, SecretBroker};
+use boardproof_tools_wasm::{WasmConfig, WasmTool};
+use boardproof_tools_http::{HttpFetchConfig, HttpFetchTool};
+use boardproof_secrets::{InMemorySecretBroker, SecretBroker};
 
 let broker: Arc<dyn SecretBroker> = Arc::new(InMemorySecretBroker::new());
 let http = Arc::new(HttpFetchTool::with_broker_and_config(
@@ -102,7 +102,7 @@ let out = tool.call(&call)?;
 Guest side (Rust → WASM Component):
 
 ```rust
-use bindings::uniclaw::tool::host;
+use bindings::boardproof::tool::host;
 
 fn call(input: Vec<u8>) -> Result<Vec<u8>, String> {
     // The guest looks up by name, never by value.
@@ -148,11 +148,11 @@ The full call pipeline (additive over 16b's pipeline):
 
 ## Adopt-don't-copy
 
-- **`IronClaw`'s `host` interface in `near:agent@0.3.0`** (`ironclaw/wit/tool.wit`) — the architectural reference for the shape: log-level enum, structured response records, auth-by-reference rather than auth-by-value, secret-existence-only check, `tool-invoke` indirection. Uniclaw's v0 `host` interface is a leaner subset (4 functions vs 8) — the richer pieces (workspace-read, tool-invoke, structured rate-limit hints, http-response with `headers-json` string) land additively when use cases demand them.
+- **`IronClaw`'s `host` interface in `near:agent@0.3.0`** (`ironclaw/wit/tool.wit`) — the architectural reference for the shape: log-level enum, structured response records, auth-by-reference rather than auth-by-value, secret-existence-only check, `tool-invoke` indirection. BoardProof's v0 `host` interface is a leaner subset (4 functions vs 8) — the richer pieces (workspace-read, tool-invoke, structured rate-limit hints, http-response with `headers-json` string) land additively when use cases demand them.
 - **`IronClaw`'s `crates/ironclaw_wasm/src/store.rs` `StoreData` shape** — adopted as `StoreData` holding limiter + WasiCtx + optional `HostState`, with the bindgen-generated `Host` trait implemented on `StoreData` (not on `HostState` directly) so the same store-data type works for both 16a/16b paths (where HostState is None) and 16c paths (where it's Some).
 - **`IronClaw`'s rate-limit constants** (1000 entries / 4 KiB per log message) — adopted as `MAX_LOG_ENTRIES` / `MAX_LOG_MESSAGE_BYTES`. Same values; same rationale (cap-busting calls become no-ops, not errors).
 
-Citations live in `crates/uniclaw-tools-wasm/src/lib.rs`, `src/host.rs`, and `wit/tool.wit`.
+Citations live in `crates/boardproof-tools-wasm/src/lib.rs`, `src/host.rs`, and `wit/tool.wit`.
 
 ## What you can do with this step today
 

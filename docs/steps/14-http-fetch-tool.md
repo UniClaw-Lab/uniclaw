@@ -2,19 +2,19 @@
 
 > **Phase:** 3 — Tools and Secrets
 > **PR:** _this PR_
-> **Crate introduced:** `uniclaw-tools-http`
-> **Crate updated:** `uniclaw-tools` (`Capability::is_granted_by` helper)
+> **Crate introduced:** `boardproof-tools-http`
+> **Crate updated:** `boardproof-tools` (`Capability::is_granted_by` helper)
 
 ## What is this step?
 
-This step ships **the first real `Tool` implementation** in the workspace, validating the `Tool` trait + `Capability` enum + `ApprovalPolicy` machinery from step 13 against actual network code. The tool is `HttpFetchTool` — a synchronous, capability-checked HTTP GET with built-in SSRF defense and bounded response reads. It's small (~280 LOC of impl + 720 LOC of tests), fast to review, and makes the wedge concrete: a Uniclaw deployment can now do something useful, end-to-end and auditable.
+This step ships **the first real `Tool` implementation** in the workspace, validating the `Tool` trait + `Capability` enum + `ApprovalPolicy` machinery from step 13 against actual network code. The tool is `HttpFetchTool` — a synchronous, capability-checked HTTP GET with built-in SSRF defense and bounded response reads. It's small (~280 LOC of impl + 720 LOC of tests), fast to review, and makes the wedge concrete: a BoardProof deployment can now do something useful, end-to-end and auditable.
 
 It also proves a deliberate choice in the Phase 3 ordering: **build a real Rust-native tool first, then add the WASM substrate**. Two reasons:
 
 1. **The Capability enum needs validating against real I/O.** Step 13 declared `NetConnect(GlobPattern)` but nothing exercised it. Now the host-allowlist gate has a concrete user, and the trait surface is proven before we commit to the WASM Component Model in step 16.
 2. **A WASM tool runtime needs capability enforcement *before* it can do anything useful.** Shipping WASM first would mean either (a) WASM tools that can't do I/O (boring), or (b) WASM tools that can do I/O without any capability gate (insecure). This step plus the next two (secrets, then WASM) sequence the dependencies correctly.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Phase 3 ships the **Hands** layer (master plan §9). Step 13 was the architecture; this step starts populating it.
 
@@ -66,7 +66,7 @@ let tool = HttpFetchTool::with_allowlist(vec![
 // no socket opened.
 ```
 
-This is the gate other tools will use too — `Capability::is_granted_by(declared, requested) -> bool` is now in `uniclaw-tools` as a small public helper.
+This is the gate other tools will use too — `Capability::is_granted_by(declared, requested) -> bool` is now in `boardproof-tools` as a small public helper.
 
 ### 2. "Even if a host is allowlisted, what if it's a private IP?"
 
@@ -131,13 +131,13 @@ Capability check happens **before** SSRF check. The order matters for error ergo
 - **Why `ureq` not `reqwest` / `hyper`?** ureq is synchronous (matches `Tool::call`'s sync trait), uses pure-Rust rustls, and pulls a fraction of `reqwest`'s deps. Hyper is too low-level for v0 — we'd be re-implementing what ureq already does.
 - **Why JSON envelope, not raw bytes?** Status code and headers matter for any non-trivial HTTP usage. A raw-bytes return would lose them. Base64 of the body keeps the envelope JSON-clean while preserving exact bytes for binary responses.
 - **Why hand-rolled mock server in tests, not `wiremock` / `mockito`?** This crate already pulls in ureq + url + serde_json + base64 — adding another HTTP-mocking dep just for tests inflates the dep tree. The mock server is ~80 LOC of `std::net::TcpListener` and exercises exactly what we need.
-- **Why no async API?** `Tool::call` is sync (decided at step 13). Async runtimes wrap a sync `Tool` in `tokio::task::spawn_blocking` if they need it. `HttpFetchTool` is sync internally for the same reason: ureq is sync, and synchronous code is easier to reason about for the kind of "kernel approves, tool runs, kernel records" three-phase flow Uniclaw uses.
+- **Why no async API?** `Tool::call` is sync (decided at step 13). Async runtimes wrap a sync `Tool` in `tokio::task::spawn_blocking` if they need it. `HttpFetchTool` is sync internally for the same reason: ureq is sync, and synchronous code is easier to reason about for the kind of "kernel approves, tool runs, kernel records" three-phase flow BoardProof uses.
 - **Why GET only?** v0 focus. Adding POST/PUT/DELETE means deciding how request bodies are encoded in the input envelope, how Content-Type is chosen, etc. — a separate step. The JSON envelope shape is forwards-compatible.
 
 ## Adopt-don't-copy
 
 - **`IronClaw`'s SSRF defense at the HTTP-client layer** — adopted in `ssrf.rs`. Their implementation runs similar IP-range checks before connecting; the table in our module doc lists the same RFCs and adds the IPv6 side. No source borrowed.
-- **`OpenFang`'s capability-enforcement-at-the-tool-boundary pattern** — adopted as `Capability::is_granted_by` (uniclaw-tools) called from `HttpFetchTool::call` before any I/O. Our enum + glob matcher is leaner than OpenFang's; same shape.
+- **`OpenFang`'s capability-enforcement-at-the-tool-boundary pattern** — adopted as `Capability::is_granted_by` (boardproof-tools) called from `HttpFetchTool::call` before any I/O. Our enum + glob matcher is leaner than OpenFang's; same shape.
 - **Conventional HTTP-client choices** — ureq, base64, url are standard Rust ecosystem crates with broad use. We pull them as deps; we don't borrow source.
 
 Citations live in the crate's `lib.rs` and `ssrf.rs` adopt-don't-copy sections.
@@ -174,4 +174,4 @@ These are explicit deferrals, not oversights. v0 is the smallest-real-tool that 
 
 ## In summary
 
-Step 14 makes Uniclaw's first agent capability concrete: a capability-checked, SSRF-defended, response-bounded HTTP GET, audited end-to-end via the existing `KernelEvent::RecordToolExecution` flow from step 13. The trait surface from step 13 is now validated against real I/O, the `Capability` enum has a real consumer, and Phase 3 has its first user-facing capability. WASM (step 16) gets to land as a substrate swap behind a proven trait, not as the first proof.
+Step 14 makes BoardProof's first agent capability concrete: a capability-checked, SSRF-defended, response-bounded HTTP GET, audited end-to-end via the existing `KernelEvent::RecordToolExecution` flow from step 13. The trait surface from step 13 is now validated against real I/O, the `Capability` enum has a real consumer, and Phase 3 has its first user-facing capability. WASM (step 16) gets to land as a substrate swap behind a proven trait, not as the first proof.

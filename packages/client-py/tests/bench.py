@@ -1,5 +1,5 @@
-"""Bench harness for ``uniclaw_client``. Spawns ``uniclaw-host`` and
-measures end-to-end ``UniclawClient.evaluate()`` /
+"""Bench harness for ``boardproof_client``. Spawns ``boardproof-host`` and
+measures end-to-end ``BoardProofClient.evaluate()`` /
 ``record_tool_execution()`` latency under three modes:
 
   (a) verify=True   — submit + verify by re-fetching + recheck
@@ -12,7 +12,7 @@ propose+record chain.
 
 Run::
 
-    cargo build --release --bin uniclaw-host -p uniclaw-host
+    cargo build --release --bin boardproof-host -p boardproof-host
     python tests/bench.py
 
 Output goes to stdout; redirect to ``bench-results/24-python-client.txt``.
@@ -30,10 +30,10 @@ import time
 import urllib.request
 from pathlib import Path
 
-from uniclaw_client import Action, UniclawClient
+from boardproof_client import Action, BoardProofClient
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-HOST_BIN = REPO_ROOT / "target" / "release" / "uniclaw-host"
+HOST_BIN = REPO_ROOT / "target" / "release" / "boardproof-host"
 FIXTURE = Path(__file__).parent / "fixtures" / "test-constitution.toml"
 SEED_HEX = "2a" * 32
 # Bench-only token. Set via env BENCH_TOKEN_HEX="..." to use a
@@ -71,7 +71,7 @@ def start_host() -> tuple[subprocess.Popen[str], str]:
         m = re.search(r"listening on (http://127\.0\.0\.1:\d+)", line)
         if m:
             return proc, m.group(1)
-    raise SystemExit("uniclaw-host did not bind within 10s")
+    raise SystemExit("boardproof-host did not bind within 10s")
 
 
 def time_run(label: str, fn, n: int) -> dict[str, float | str | int]:
@@ -101,8 +101,8 @@ def main() -> None:
         action = Action(kind="http.fetch", target="https://example.com/bench", input_hash="00" * 32)
         tool_action = Action(kind="tool.http_fetch", target="https://example.com/bench-tool", input_hash="11" * 32)
 
-        c_verify = UniclawClient(base_url=base_url, bearer_token=BENCH_TOKEN_HEX)
-        c_no_verify = UniclawClient(
+        c_verify = BoardProofClient(base_url=base_url, bearer_token=BENCH_TOKEN_HEX)
+        c_no_verify = BoardProofClient(
             base_url=base_url,
             verify_by_default=False,
             bearer_token=BENCH_TOKEN_HEX,
@@ -186,7 +186,7 @@ def main() -> None:
 
         r5 = time_run("propose+record chain (both verify=True)", chain, n // 2)
 
-        print("=== uniclaw-client (Python) end-to-end latency bench ===")
+        print("=== boardproof-client (Python) end-to-end latency bench ===")
         print(f"baseUrl={base_url}")
         print(f"python={sys.version.split()[0]}")
         print(f"host bin={HOST_BIN}")

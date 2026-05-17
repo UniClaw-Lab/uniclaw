@@ -1,0 +1,27 @@
+[package]
+name = "boardproof-router"
+description = "Channel-aware approval routing for BoardProof — delivers Pending receipts to operators."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+boardproof-receipt.workspace = true
+boardproof-approval.workspace = true
+boardproof-kernel.workspace = true
+boardproof-constitution.workspace = true
+boardproof-explain.workspace = true
+
+[dev-dependencies]
+boardproof-receipt = { workspace = true, features = ["crypto"] }
+ed25519-dalek = { workspace = true }
+
+[lints]
+workspace = true

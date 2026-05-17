@@ -2,8 +2,8 @@
 
 > **Phase:** 3 — Tools and Secrets
 > **PR:** _this PR_
-> **Crate introduced:** `uniclaw-secrets`
-> **Crates updated:** `uniclaw-tools` (`ToolMetadata` on `ToolOutput`), `uniclaw-tools-http` (auth via `BearerHeader`), `uniclaw-kernel` (`secret_used` provenance edges)
+> **Crate introduced:** `boardproof-secrets`
+> **Crates updated:** `boardproof-tools` (`ToolMetadata` on `ToolOutput`), `boardproof-tools-http` (auth via `BearerHeader`), `boardproof-kernel` (`secret_used` provenance edges)
 
 ## What is this step?
 
@@ -11,11 +11,11 @@ This step ships the **Secret Broker**: the typed surface that lets a tool ask fo
 
 Three pieces land together:
 
-1. **`uniclaw-secrets`** — a new crate with `SecretValue` (drop-zeroizing buffer, redacted Debug, no Display/Serialize/Clone), the `SecretBroker` trait + `BrokerError`, an `InMemorySecretBroker` (BTreeMap-backed), and an `EnvSecretBroker` (reads from environment variables under a configurable prefix).
+1. **`boardproof-secrets`** — a new crate with `SecretValue` (drop-zeroizing buffer, redacted Debug, no Display/Serialize/Clone), the `SecretBroker` trait + `BrokerError`, an `InMemorySecretBroker` (BTreeMap-backed), and an `EnvSecretBroker` (reads from environment variables under a configurable prefix).
 2. **`HttpFetchTool::with_broker(...)`** — three new constructors that accept an `Arc<dyn SecretBroker>`. `HttpFetchInput` gains an optional `auth: AuthSpec` field; v0 supports `BearerHeader { secret_ref }`. The tool fetches the secret at call time, sets `Authorization: Bearer <value>`, drops the `SecretValue` (which zeroes its buffer), and records the *reference name* in `ToolOutput::metadata.secrets_used`.
 3. **`secret_used` provenance** — `KernelEvent::RecordToolExecution` reads `output.metadata.secrets_used` and mints one provenance edge per name, alongside the existing `tool_input` / `tool_output` edges. The audit chain now answers "did this run touch privileged credentials?" without re-running the tool.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 Phase 3's Hands layer is now three layers deep:
 
@@ -108,9 +108,9 @@ A verifier walking the receipt log can now answer "list every receipt that used 
 
 ```rust
 use std::sync::Arc;
-use uniclaw_secrets::{InMemorySecretBroker, SecretBroker};
-use uniclaw_tools::GlobPattern;
-use uniclaw_tools_http::{AuthSpec, HttpFetchConfig, HttpFetchInput, HttpFetchTool};
+use boardproof_secrets::{InMemorySecretBroker, SecretBroker};
+use boardproof_tools::GlobPattern;
+use boardproof_tools_http::{AuthSpec, HttpFetchConfig, HttpFetchInput, HttpFetchTool};
 
 // 1. Operator configures the broker once at startup.
 let mut broker = InMemorySecretBroker::new();
@@ -169,7 +169,7 @@ Auth resolution sits **after** the capability and SSRF gates: a host that's deni
 - **`OpenClaw`'s "secret reference, not secret value" model** — adopted as `AuthSpec::BearerHeader { secret_ref: String }` and `metadata.secrets_used: Vec<String>` (names only). The provenance edge format mirrors the same principle. No source borrowed.
 - **`ZeroClaw`'s zeroize-on-drop discipline** — adopted in `SecretValue::Drop`. ZeroClaw uses the same `zeroize` crate; we landed at the same answer independently. No source borrowed.
 
-Citations live in `uniclaw-secrets/src/lib.rs` and `uniclaw-secrets/src/broker.rs`.
+Citations live in `boardproof-secrets/src/lib.rs` and `boardproof-secrets/src/broker.rs`.
 
 ## What you can do with this step today
 

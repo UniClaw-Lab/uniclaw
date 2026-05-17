@@ -2,7 +2,7 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #2
-> **Crate introduced:** `uniclaw-kernel`
+> **Crate introduced:** `boardproof-kernel`
 
 ## What is this step?
 
@@ -10,9 +10,9 @@ This step builds the **trusted runtime core** — the small, central piece of co
 
 Think of it like the engine of a car: every other part of the car connects to the engine, but the engine itself is one focused thing that does one well-understood job.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
-The kernel is the **Spine** layer of Uniclaw's architecture (master plan §9 splits Uniclaw into Brain / Spine / Hands / Skin / Sense). Every action the agent takes flows through the kernel:
+The kernel is the **Spine** layer of BoardProof's architecture (master plan §9 splits BoardProof into Brain / Spine / Hands / Skin / Sense). Every action the agent takes flows through the kernel:
 
 ```
 Brain (model)  --proposes-->  Kernel  --produces-->  Receipt

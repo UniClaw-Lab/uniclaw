@@ -1,31 +1,31 @@
-# `@uniclaw/verifier`
+# `@boardproof/verifier`
 
-Standalone TypeScript verifier for [Uniclaw](https://github.com/UniClaw-Lab/uniclaw) receipts.
+Standalone TypeScript verifier for [BoardProof](https://github.com/UniClaw-Lab/boardproof) receipts.
 
 Recomputes the canonical body bytes (RFC 8785 JCS), the BLAKE3 `content_id`, and verifies the Ed25519 signature against the receipt's embedded issuer key. Browser + Node 20+. No native deps.
 
 ## Why this exists
 
-Uniclaw's wedge is *"everyone trusts a Uniclaw-compatible receipt."* For that to be real, a verifier has to exist outside the Rust kernel — in the language teams actually use for backend integrations, CI/CD pipelines, and compliance tooling.
+BoardProof's wedge is *"everyone trusts a BoardProof-compatible receipt."* For that to be real, a verifier has to exist outside the Rust kernel — in the language teams actually use for backend integrations, CI/CD pipelines, and compliance tooling.
 
 This package is the canonical TypeScript reference. It produces byte-identical canonical output to:
 
-- The Rust canonicalizer in `crates/uniclaw-receipt/src/canonical.rs`.
-- The browser verifier embedded in `crates/uniclaw-host/src/verify.html`.
-- The Node conformance smoke at `crates/uniclaw-receipt/tests/vectors/conformance-smoke.mjs`.
+- The Rust canonicalizer in `crates/boardproof-receipt/src/canonical.rs`.
+- The browser verifier embedded in `crates/boardproof-host/src/verify.html`.
+- The Node conformance smoke at `crates/boardproof-receipt/tests/vectors/conformance-smoke.mjs`.
 
 Cross-language byte-identity is enforced by a conformance test that loads the same fixture (`canonical-v2.json`) the Rust snapshot test loads.
 
 ## Install
 
 ```bash
-npm install @uniclaw/verifier
+npm install @boardproof/verifier
 ```
 
 ## Usage
 
 ```ts
-import { verifyReceiptUrl, verifyReceiptJson, verifyReceipt } from "@uniclaw/verifier";
+import { verifyReceiptUrl, verifyReceiptJson, verifyReceipt } from "@boardproof/verifier";
 
 // Fetch + verify in one call.
 const result = await verifyReceiptUrl("http://localhost:3000/receipts/abc...");
@@ -62,14 +62,14 @@ interface VerifyResult {
 A tiny CLI ships with the package:
 
 ```bash
-npx uniclaw-verify-ts http://localhost:3000/receipts/abc...
+npx boardproof-verify-ts http://localhost:3000/receipts/abc...
 # ✓ verified | issuer=2a... decision=allowed schema_v=2 content_id=30136578...
 
-npx uniclaw-verify-ts ./local-receipt.json
+npx boardproof-verify-ts ./local-receipt.json
 # same shape; exits 0 on verify, 1 on failure, 2 on bad input
 ```
 
-Pairs with the Uniclaw end-to-end demo (`cargo run --release --example end-to-end-demo -p uniclaw-host`) — copy any printed receipt URL into the CLI and watch the trust property work.
+Pairs with the BoardProof end-to-end demo (`cargo run --release --example end-to-end-demo -p boardproof-host`) — copy any printed receipt URL into the CLI and watch the trust property work.
 
 ## Trust model
 
@@ -83,7 +83,7 @@ If you want to pin trust to a specific issuer key, compare `result.issuerHex` ag
 
 ## Receipt format
 
-This package targets [RFC-0001 Schema v2](https://github.com/UniClaw-Lab/uniclaw/blob/main/RFCS/0001-receipt-format.md). It also accepts v1 (legacy) receipts via the same fallback path the browser verifier uses (`JSON.stringify(body)` over the parsed body).
+This package targets [RFC-0001 Schema v2](https://github.com/UniClaw-Lab/boardproof/blob/main/RFCS/0001-receipt-format.md). It also accepts v1 (legacy) receipts via the same fallback path the browser verifier uses (`JSON.stringify(body)` over the parsed body).
 
 ## Building
 
@@ -96,4 +96,4 @@ npm run build  # emits dist/ (ESM)
 
 ## License
 
-MIT OR Apache-2.0, matching the Uniclaw monorepo.
+MIT OR Apache-2.0, matching the BoardProof monorepo.

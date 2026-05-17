@@ -3,15 +3,15 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "uniclaw-client"
+name = "boardproof-client"
 version = "0.1.0"
-description = "Python client + verifier for Uniclaw receipts. The on-ramp for any Python-based runtime (NemoClaw, compliance tooling, custom agents) that wants to anchor agent actions into Uniclaw receipts."
+description = "Python client + verifier for BoardProof receipts. The on-ramp for any Python-based runtime (NemoClaw, compliance tooling, custom agents) that wants to anchor agent actions into BoardProof receipts."
 readme = "README.md"
 license = { text = "MIT OR Apache-2.0" }
 requires-python = ">=3.10"
-authors = [{ name = "Uniclaw contributors" }]
+authors = [{ name = "BoardProof contributors" }]
 keywords = [
-    "uniclaw",
+    "boardproof",
     "receipt",
     "client",
     "verifier",
@@ -47,9 +47,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/UniClaw-Lab/uniclaw"
-Repository = "https://github.com/UniClaw-Lab/uniclaw"
-Source = "https://github.com/UniClaw-Lab/uniclaw/tree/main/packages/client-py"
+Homepage = "https://github.com/UniClaw-Lab/boardproof"
+Repository = "https://github.com/UniClaw-Lab/boardproof"
+Source = "https://github.com/UniClaw-Lab/boardproof/tree/main/packages/client-py"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -61,7 +61,7 @@ where = ["src"]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 markers = [
-    "integration: tests that spawn a real uniclaw-host subprocess (off by default; opt-in via UNICLAW_INTEGRATION=1)",
+    "integration: tests that spawn a real boardproof-host subprocess (off by default; opt-in via BOARDPROOF_INTEGRATION=1)",
 ]
 
 [tool.mypy]
@@ -70,7 +70,7 @@ strict = true
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
-files = ["src/uniclaw_client"]
+files = ["src/boardproof_client"]
 
 [[tool.mypy.overrides]]
 module = ["blake3", "nacl.*"]

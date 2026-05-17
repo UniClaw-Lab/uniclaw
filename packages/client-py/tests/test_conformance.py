@@ -1,5 +1,5 @@
 """Cross-language conformance test. Loads
-``crates/uniclaw-receipt/tests/vectors/canonical-v2.json`` — the
+``crates/boardproof-receipt/tests/vectors/canonical-v2.json`` — the
 SAME fixture Rust and ``packages/verifier-ts`` load — and asserts
 that every vector's canonical bytes and BLAKE3 hash match.
 
@@ -15,14 +15,14 @@ from typing import Any
 
 import pytest
 
-from uniclaw_client._canonical import canonicalize_jcs
-from uniclaw_client.verify import compute_content_id_hex
+from boardproof_client._canonical import canonicalize_jcs
+from boardproof_client.verify import compute_content_id_hex
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = (
     REPO_ROOT
     / "crates"
-    / "uniclaw-receipt"
+    / "boardproof-receipt"
     / "tests"
     / "vectors"
     / "canonical-v2.json"
@@ -33,7 +33,7 @@ def _load_fixture() -> dict[str, Any]:
     data: Any = json.loads(FIXTURE.read_text())
     if not isinstance(data, dict):
         pytest.fail(f"fixture {FIXTURE} did not deserialize to a dict")
-    assert data.get("format") == "uniclaw-canonical-v2", (
+    assert data.get("format") == "boardproof-canonical-v2", (
         f"unexpected fixture format: {data.get('format')!r}"
     )
     return data

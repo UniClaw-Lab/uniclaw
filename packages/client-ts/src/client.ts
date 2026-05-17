@@ -1,4 +1,4 @@
-// UniclawClient: the TypeScript adapter for Uniclaw's HTTP
+// BoardProofClient: the TypeScript adapter for BoardProof's HTTP
 // proposal API (step 21). One class, three operations:
 //
 //   - `evaluate(action)`  → POST /v1/proposals
@@ -6,19 +6,19 @@
 //   - `getReceipt(id)`    → GET  /receipts/{hash}
 //
 // Plus `verifyReceiptUrl()` which re-exports the verify path from
-// `@uniclaw/verifier` (step 20a).
+// `@boardproof/verifier` (step 20a).
 //
 // **Verify-by-default.** Every mint goes through the verifier
 // before being returned to the caller. If the recomputed
-// signature doesn't validate, `UniclawVerifyError` is thrown. The
+// signature doesn't validate, `BoardProofVerifyError` is thrown. The
 // caller can opt out per-call with `{ verify: false }` or globally
 // with `verifyByDefault: false` — but the safe path is on by
 // default. This is the trust property the wedge depends on: the
 // client never trusts the server's claim about what was signed.
 
-import { verifyReceiptJson, type VerifyResult } from "@uniclaw/verifier";
+import { verifyReceiptJson, type VerifyResult } from "@boardproof/verifier";
 
-import { UniclawError, UniclawVerifyError } from "./error.js";
+import { BoardProofError, BoardProofVerifyError } from "./error.js";
 import type {
   Action,
   AllowedDecision,
@@ -32,8 +32,8 @@ import type {
   WireReceiptResponse,
 } from "./types.js";
 
-export interface UniclawClientOptions {
-  /// Base URL of the running `uniclaw-host` (e.g.
+export interface BoardProofClientOptions {
+  /// Base URL of the running `boardproof-host` (e.g.
   /// `"http://127.0.0.1:8787"`). Trailing slashes are tolerated.
   baseUrl: string;
   /// Optional `fetch` override — useful in tests, or for callers
@@ -52,7 +52,7 @@ export interface UniclawClientOptions {
   /// (`GET /receipts/<hash>` and `verifyReceiptUrl`) are NOT
   /// auth'd — receipts are publicly verifiable by design.
   ///
-  /// Required by `uniclaw-host` started with `--bearer-token-hex`.
+  /// Required by `boardproof-host` started with `--bearer-token-hex`.
   /// Omit when talking to a host running `--insecure-no-auth`.
   bearerToken?: string;
 }
@@ -62,15 +62,15 @@ export interface EvaluateOptions {
   verify?: boolean;
 }
 
-/// Idiomatic TypeScript client for the Uniclaw HTTP proposal API.
-/// One instance per `uniclaw-host` you talk to.
-export class UniclawClient {
+/// Idiomatic TypeScript client for the BoardProof HTTP proposal API.
+/// One instance per `boardproof-host` you talk to.
+export class BoardProofClient {
   readonly #baseUrl: string;
   readonly #fetch: typeof fetch;
   readonly #verifyByDefault: boolean;
   readonly #bearerToken: string | undefined;
 
-  constructor(opts: UniclawClientOptions) {
+  constructor(opts: BoardProofClientOptions) {
     // Strip any trailing slash so `${baseUrl}/v1/...` doesn't
     // produce a double slash.
     this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -163,11 +163,11 @@ export class UniclawClient {
   }
 
   /// Fetch a receipt by content_id and verify it locally. Returns
-  /// the full `VerifyResult` from `@uniclaw/verifier`.
+  /// the full `VerifyResult` from `@boardproof/verifier`.
   async verifyReceiptUrl(url: string): Promise<VerifyResult> {
     const response = await this.#fetch(url);
     if (!response.ok) {
-      throw new UniclawError(
+      throw new BoardProofError(
         response.status,
         "fetch_failed",
         `GET ${url} → HTTP ${response.status}`,
@@ -183,7 +183,7 @@ export class UniclawClient {
     const url = `${this.#baseUrl}/receipts/${contentId}`;
     const response = await this.#fetch(url);
     if (!response.ok) {
-      throw new UniclawError(
+      throw new BoardProofError(
         response.status,
         "fetch_failed",
         `GET ${url} → HTTP ${response.status}`,
@@ -321,7 +321,7 @@ export class UniclawClient {
 
     const result = await this.verifyReceiptUrl(decision.receiptUrl);
     if (!result.ok) {
-      throw new UniclawVerifyError(
+      throw new BoardProofVerifyError(
         decision.contentId,
         result.error ??
           "signature did not verify under the embedded issuer key",
@@ -332,7 +332,7 @@ export class UniclawClient {
     // which receipt it returned. The verify result's contentIdHex
     // is recomputed from the bytes the verifier received.
     if (result.contentIdHex !== decision.contentId) {
-      throw new UniclawVerifyError(
+      throw new BoardProofVerifyError(
         decision.contentId,
         `server claimed content_id ${decision.contentId} but the ` +
           `recomputed hash is ${result.contentIdHex}`,
@@ -340,18 +340,18 @@ export class UniclawClient {
     }
   }
 
-  async #parseError(response: Response): Promise<UniclawError> {
+  async #parseError(response: Response): Promise<BoardProofError> {
     const status = response.status;
     let body: unknown;
     try {
       body = await response.json();
     } catch {
-      return new UniclawError(status, "non_json_response", await safeText(response));
+      return new BoardProofError(status, "non_json_response", await safeText(response));
     }
     if (isErrorBody(body)) {
-      return new UniclawError(status, body.error, body.detail);
+      return new BoardProofError(status, body.error, body.detail);
     }
-    return new UniclawError(status, "unknown", JSON.stringify(body));
+    return new BoardProofError(status, "unknown", JSON.stringify(body));
   }
 }
 

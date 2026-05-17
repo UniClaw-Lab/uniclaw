@@ -2,7 +2,7 @@
 
 > **Phase:** 2 — Public Service
 > **PR:** _this PR_
-> **Crates updated:** `uniclaw-sleep` (adds Deep Sleep), `uniclaw-kernel` (new `KernelEvent::RunDeepSleep`)
+> **Crates updated:** `boardproof-sleep` (adds Deep Sleep), `boardproof-kernel` (new `KernelEvent::RunDeepSleep`)
 
 ## What is this step?
 
@@ -26,9 +26,9 @@ graph LR
   end
 ```
 
-After this step, **two of the three sleep stages ship**. The brand promise — *"Uniclaw is the first agent runtime that sleeps"* (master plan §16.3.4) — is materially closer to true. REM Sleep is left for Phase 4 because it needs subsystems that aren't built yet (provenance graph, federated memory).
+After this step, **two of the three sleep stages ship**. The brand promise — *"BoardProof is the first agent runtime that sleeps"* (master plan §16.3.4) — is materially closer to true. REM Sleep is left for Phase 4 because it needs subsystems that aren't built yet (provenance graph, federated memory).
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 The sleep architecture is symmetric. Light Sleep wraps cleaners (mutating, GC-style passes); Deep Sleep wraps walkers (read-only, integrity-checking passes). Both produce a typed report that the kernel turns into a signed receipt.
 
@@ -84,8 +84,8 @@ Best-effort: a failing walker (including one that *detected* tampering) is **rec
 
 ```rust
 use std::sync::Arc;
-use uniclaw_kernel::{Kernel, KernelEvent, ReceiptLogWalker, run_deep_sleep};
-use uniclaw_store_sqlite::SqliteReceiptLog;
+use boardproof_kernel::{Kernel, KernelEvent, ReceiptLogWalker, run_deep_sleep};
+use boardproof_store_sqlite::SqliteReceiptLog;
 
 // Open the persistent receipt log this kernel produces into.
 let audit = SqliteReceiptLog::open("./receipts.db", my_pubkey)?;
@@ -129,7 +129,7 @@ If `verify_chain` had failed, the edge would be `deep_sleep_failure` with the er
 ## Why this design choice and not another?
 
 - **Why a separate `Walkable` trait, not just reuse `Cleanable`?** Cleaners take `&mut self` because they mutate state (delete rows, vacuum tables). Walkers take `&self` because integrity walks are read-only by definition. Conflating them would let a "cleaner" silently rewrite the audit chain — a security smell. The two traits are deliberately separate.
-- **Why a built-in `ReceiptLogWalker` and not "users supply their own"?** Because every Uniclaw deployment will want to walk the receipt log, and the wrapper is twelve lines of code. Shipping it removes a foot-gun. Other walkers (provenance, memory) live in their own crates when those subsystems land.
+- **Why a built-in `ReceiptLogWalker` and not "users supply their own"?** Because every BoardProof deployment will want to walk the receipt log, and the wrapper is twelve lines of code. Shipping it removes a foot-gun. Other walkers (provenance, memory) live in their own crates when those subsystems land.
 - **Why mint a receipt for an empty pass (no walkers registered)?** Same reason as Light Sleep: a quiet receipt chain with no `$kernel/sleep/deep` entries would mean the schedule isn't firing, which is itself the alarm-worthy condition.
 - **Why `&dyn Walkable` and not a registry?** The scheduler that *runs* Deep Sleep is the right place to know which walkers to invoke. Different deployments register different walkers. No global registry; the caller passes the slice.
 - **Why does a walker that detects tampering return `Err`, not `Ok` with a flag?** Because tampering is the failure mode, and the walker's contract is "tell me if anything is wrong." `Err` is the natural shape; the kernel records it as a `deep_sleep_failure` provenance edge so auditors see it.

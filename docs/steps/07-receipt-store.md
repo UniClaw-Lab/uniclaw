@@ -2,7 +2,7 @@
 
 > **Phase:** 1 — Shippable Core
 > **PR:** #6
-> **Crate introduced:** `uniclaw-store`
+> **Crate introduced:** `boardproof-store`
 
 ## What is this step?
 
@@ -10,7 +10,7 @@ This step adds **storage** for receipts: a chain-validated, issuer-pinned log th
 
 The kernel produces receipts. The receipt store keeps them. But it does not just keep them — it **validates** every append. A receipt that breaks the chain, comes from the wrong issuer, or fails its signature check is **refused**, and the log's state is unchanged.
 
-## Where does this fit in the whole Uniclaw?
+## Where does this fit in the whole BoardProof?
 
 ```
 Kernel  --emits-->  Receipt  --append-->  ReceiptLog
@@ -53,7 +53,7 @@ Two indexes:
 - **By sequence number** — direct array access. O(1).
 - **By content ID** (the BLAKE3 hash of the receipt) — `BTreeMap<[u8;32], usize>`. O(log n).
 
-Lookups by content ID matter because that's how receipts get *referenced* in the world: `uniclaw://receipt/<hex_hash>` is the canonical address. The receipt store must be able to find a receipt by its public address.
+Lookups by content ID matter because that's how receipts get *referenced* in the world: `boardproof://receipt/<hex_hash>` is the canonical address. The receipt store must be able to find a receipt by its public address.
 
 ### 4. "How do we make this trait-shaped so SQLite can plug in later?"
 

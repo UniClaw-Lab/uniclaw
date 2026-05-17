@@ -22,7 +22,7 @@ import {
 import type { Receipt, ReceiptBody } from "../src/types.js";
 
 // Same deterministic seed the demo binary uses
-// (`crates/uniclaw-host/examples/end-to-end-demo.rs`).
+// (`crates/boardproof-host/examples/end-to-end-demo.rs`).
 const DEMO_SEED = new Uint8Array(32).fill(42);
 
 function sampleBody(seq = 0): ReceiptBody {
